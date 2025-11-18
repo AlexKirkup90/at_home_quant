@@ -65,7 +65,8 @@ def get_snapshot_dates() -> list[datetime.date]:
         return []
     try:
         dates = session.execute(select(PortfolioSnapshot.as_of_date)).scalars().all()
-    except OperationalError:
+    except (OperationalError, SQLAlchemyError, AttributeError) as exc:
+        logging.getLogger(__name__).warning("get_snapshot_dates failed: %s", exc)
         return []
     finally:
         try:
@@ -158,21 +159,18 @@ def show_portfolio_section() -> None:
     st.header("Current Portfolio & Rebalance")
 
     snapshot_dates = get_snapshot_dates()
-    latest_price_date = get_latest_price_date()
-
-    if not snapshot_dates and latest_price_date is None:
+    if not snapshot_dates:
         st.warning(
-            "No price data or portfolio snapshots found. "
-            "Run the ETL and monthly portfolio build before using this section."
+            "No portfolio snapshots found. "
+            "Run the historical ETL and then generate a portfolio in this environment "
+            "before using the portfolio/rebalance view."
         )
         return
 
+    latest_price_date = get_latest_price_date()
     default_date = snapshot_dates[0] if snapshot_dates else latest_price_date
     selected_date = st.date_input("Portfolio as-of date", value=default_date, max_value=default_date)
     threshold = st.slider("Rebalance threshold (%)", min_value=0.0, max_value=5.0, value=0.5, step=0.1) / 100
-
-    if not snapshot_dates:
-        st.info("No portfolio snapshots found. Run the ETL and portfolio builder first.")
 
     try:
         target_portfolio = build_monthly_portfolio(selected_date)
