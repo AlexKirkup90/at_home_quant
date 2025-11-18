@@ -62,12 +62,19 @@ def fetch_price_history(symbol: str | TickerInfo, start: datetime.date | None = 
 
 
 def compute_returns(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.sort_values(["symbol", "date"]).copy()
-    if not df.empty:
-        df["return_"] = df.groupby("symbol")["adj_close"].pct_change()
-    else:
-        df["return_"] = []
-    return df
+    if df.empty:
+        # ensure we return a DataFrame with the same columns plus an empty return_ column
+        result = df.copy()
+        result["return_"] = pd.Series(dtype=float)
+        return result
+
+    result = df.copy()
+    result["date"] = pd.to_datetime(result["date"])
+    result = result.sort_values(["symbol", "date"])
+    result["return_"] = (
+        result.groupby("symbol")["close"].pct_change().fillna(0.0)
+    )
+    return result
 
 
 def fetch_prices_for_universe(symbols: Sequence[str], start: datetime.date | None = None, end: datetime.date | None = None) -> pd.DataFrame:

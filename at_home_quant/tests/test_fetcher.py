@@ -15,11 +15,30 @@ def test_fetch_price_history_has_required_columns():
 
 
 def test_compute_returns_monotonic_sorting():
-    start = datetime.date.today() - datetime.timedelta(days=60)
-    df = fetcher.fetch_price_history("BIL", start=start)
+    df = pd.DataFrame(
+        {
+            "date": [
+                datetime.date(2024, 1, 1),
+                datetime.date(2024, 1, 2),
+                datetime.date(2024, 1, 1),
+                datetime.date(2024, 1, 2),
+            ],
+            "symbol": ["AAA", "AAA", "BBB", "BBB"],
+            "open": [100, 101, 200, 202],
+            "high": [101, 102, 202, 204],
+            "low": [99, 100, 198, 200],
+            "close": [100, 102, 200, 206],
+            "adj_close": [100, 102, 200, 206],
+            "volume": [1_000, 1_100, 2_000, 2_100],
+        }
+    )
+
     df_returns = fetcher.compute_returns(df)
+
     assert "return_" in df_returns.columns
-    # first return per symbol can be NaN but subsequent should exist if enough data
-    non_na_returns = df_returns.dropna(subset=["return_"])
-    assert not non_na_returns.empty
-    assert df_returns["date"].is_monotonic_increasing
+    # ensure dates are sorted within each symbol and returns calculated accordingly
+    grouped = df_returns.groupby("symbol")
+    for _, group in grouped:
+        assert group["date"].is_monotonic_increasing
+        assert group.iloc[0]["return_"] == 0.0
+        assert group.iloc[1]["return_"] > 0.0
