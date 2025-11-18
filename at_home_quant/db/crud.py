@@ -44,6 +44,11 @@ def upsert_prices(session: Session, price_df: pd.DataFrame) -> None:
     if price_df.empty:
         return
 
+    required_cols = {"date", "symbol", "close"}
+    missing_cols = required_cols - set(price_df.columns)
+    if missing_cols:
+        raise ValueError(f"Missing required price columns: {missing_cols}")
+
     symbols = sorted(price_df["symbol"].unique())
     symbol_to_id = _ticker_symbol_to_id(session, symbols)
 
