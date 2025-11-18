@@ -80,3 +80,21 @@ python -m at_home_quant.scripts.print_ranking --universe NASDAQ100 --as-of 2025-
 ```
 
 Ensure equity constituents and price history for the chosen universe exist in the database (the synthetic loaders used in tests are compatible with this flow).
+
+## Portfolio Construction & Rebalancing (Phase 4)
+
+Phase 4 connects the regime and ranking engines to produce a monthly target portfolio and minimal-turnover rebalance instructions.
+
+- Build a target mix via `build_monthly_portfolio(as_of_date)` which:
+  - Chooses the best universe from the regime engine and its suggested equity band.
+  - Allocates equity exposure to the top-ranked stocks (softmax weights with position caps).
+  - Assigns the remaining defensive sleeve to Gold (40%) and Cash/T-Bills (60%).
+- Compare snapshots with `compute_rebalance(as_of_date)` to generate buy/sell/hold deltas.
+
+A CLI helper prints the monthly rebalance plan:
+
+```bash
+python -m at_home_quant.scripts.print_rebalance --as-of 2025-02-28
+```
+
+Snapshots are stored in the `portfolio_snapshots` table for historical inspection.
