@@ -58,3 +58,15 @@ pytest
 ## Next steps
 
 With the data layer in place, future phases will add the regime/universe scoring engine, security selection, and portfolio construction built on top of this storage layer.
+
+## Regime Engine (Phase 2)
+
+The regime engine computes composite regime scores for NASDAQ 100, S&P 500, and FTSE 250 universes based on trend, momentum, realized volatility, and drawdown signals stored in the database. Use `get_current_regime(as_of_date)` to obtain the current best universe and suggested equity bands.
+
+Example:
+
+```bash
+python -m at_home_quant.scripts.print_regime --as-of 2025-01-31
+```
+
+The call reads benchmark price history from the existing database; ensure you have run the ETL loaders so the required tickers are populated.

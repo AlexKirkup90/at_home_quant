@@ -2,7 +2,7 @@ import datetime
 from pathlib import Path
 from typing import List
 
-from pydantic import BaseSettings, Field
+from pydantic.v1 import BaseSettings, Field
 
 
 class Settings(BaseSettings):

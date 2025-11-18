@@ -5,6 +5,5 @@ __pycache__/
 venv/
 *.db
 *.sqlite
-.data/
-data/
+/data/
 .GIT*
