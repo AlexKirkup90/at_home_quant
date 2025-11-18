@@ -70,3 +70,13 @@ python -m at_home_quant.scripts.print_regime --as-of 2025-01-31
 ```
 
 The call reads benchmark price history from the existing database; ensure you have run the ETL loaders so the required tickers are populated.
+
+## Security Selection Engine (Phase 3)
+
+Phase 3 adds a stock-ranking layer that scores individual equities within each universe using momentum, stability, low volatility, value, and shareholder yield factors. Invoke `rank_universe(universe_name, as_of_date, top_n)` to obtain the top names and their composite scores. A CLI helper mirrors the regime script:
+
+```bash
+python -m at_home_quant.scripts.print_ranking --universe NASDAQ100 --as-of 2025-01-31 --top-n 15
+```
+
+Ensure equity constituents and price history for the chosen universe exist in the database (the synthetic loaders used in tests are compatible with this flow).
