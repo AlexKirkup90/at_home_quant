@@ -14,6 +14,7 @@ from typing import Iterable, Optional
 
 import pandas as pd
 from sqlalchemy import func, select
+from sqlalchemy.exc import OperationalError
 
 try:  # Streamlit may be optional in some environments
     import streamlit as st
@@ -39,14 +40,24 @@ from at_home_quant.selection.service import rank_universe
 
 def get_latest_price_date() -> Optional[datetime.date]:
     """Return the most recent price date in the database."""
-    with get_session() as session:
+    session = get_session()
+    try:
         return session.execute(select(func.max(PriceDaily.date))).scalar_one_or_none()
+    except OperationalError:
+        return None
+    finally:
+        session.close()
 
 
 def get_snapshot_dates() -> list[datetime.date]:
     """Return all available portfolio snapshot dates (descending)."""
-    with get_session() as session:
+    session = get_session()
+    try:
         dates = session.execute(select(PortfolioSnapshot.as_of_date)).scalars().all()
+    except OperationalError:
+        return []
+    finally:
+        session.close()
     return sorted(dates, reverse=True)
 
 
@@ -87,7 +98,14 @@ def show_regime_section() -> None:
     require_streamlit()
     st.header("Regime & Universe Overview")
 
-    latest_date = get_latest_price_date() or datetime.date.today()
+    latest_date = get_latest_price_date()
+    if latest_date is None:
+        st.warning(
+            "No price data found in the database. "
+            "Run the ETL / data load scripts before using the regime overview."
+        )
+        return
+
     selected_date = st.date_input("As-of date", value=latest_date, max_value=latest_date)
 
     try:
@@ -126,7 +144,16 @@ def show_portfolio_section() -> None:
     st.header("Current Portfolio & Rebalance")
 
     snapshot_dates = get_snapshot_dates()
-    default_date = snapshot_dates[0] if snapshot_dates else (get_latest_price_date() or datetime.date.today())
+    latest_price_date = get_latest_price_date()
+
+    if not snapshot_dates and latest_price_date is None:
+        st.warning(
+            "No price data or portfolio snapshots found. "
+            "Run the ETL and monthly portfolio build before using this section."
+        )
+        return
+
+    default_date = snapshot_dates[0] if snapshot_dates else latest_price_date
     selected_date = st.date_input("Portfolio as-of date", value=default_date, max_value=default_date)
     threshold = st.slider("Rebalance threshold (%)", min_value=0.0, max_value=5.0, value=0.5, step=0.1) / 100
 
@@ -160,7 +187,14 @@ def show_ranking_section() -> None:
 
     universes = [u for u in Universe if u != Universe.BENCHMARK]
     universe_name = st.selectbox("Universe", options=universes, format_func=lambda u: u.value)
-    latest_date = get_latest_price_date() or datetime.date.today()
+    latest_date = get_latest_price_date()
+    if latest_date is None:
+        st.warning(
+            "No price data found in the database. "
+            "Run the ETL / data load scripts before using the ranking view."
+        )
+        return
+
     selected_date = st.date_input("Ranking date", value=latest_date, max_value=latest_date, key="ranking_date")
     top_n = st.slider("Top N", min_value=1, max_value=50, value=15)
 
@@ -187,6 +221,11 @@ def show_performance_section() -> None:
     try:
         monthly = get_monthly_performance()
         summary = get_performance_summary()
+    except OperationalError:
+        st.info(
+            "Performance data is unavailable. Build portfolios and run performance calculation first."
+        )
+        return
     except Exception as exc:  # noqa: BLE001
         st.info("Performance data is unavailable. Build portfolios and run performance calculation first.")
         st.caption(str(exc))
@@ -194,6 +233,9 @@ def show_performance_section() -> None:
 
     st.subheader("Monthly performance")
     monthly_df = performance_to_dataframe(monthly)
+    if monthly_df.empty:
+        st.info("No performance history available yet. Run at least one monthly portfolio cycle first.")
+        return
     st.dataframe(monthly_df, use_container_width=True)
 
     st.subheader("Summary stats")
