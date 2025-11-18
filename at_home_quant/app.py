@@ -9,12 +9,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import datetime
+import logging
 from dataclasses import asdict
 from typing import Iterable, Optional
 
 import pandas as pd
 from sqlalchemy import func, select
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 try:  # Streamlit may be optional in some environments
     import streamlit as st
@@ -47,7 +48,8 @@ def get_latest_price_date() -> Optional[datetime.date]:
         return None
     try:
         return session.execute(select(func.max(PriceDaily.date))).scalar_one_or_none()
-    except OperationalError:
+    except (OperationalError, SQLAlchemyError, AttributeError) as exc:
+        logging.getLogger(__name__).warning("get_latest_price_date failed: %s", exc)
         return None
     finally:
         try:
