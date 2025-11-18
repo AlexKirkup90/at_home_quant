@@ -34,6 +34,8 @@ from at_home_quant.portfolio.service import build_monthly_portfolio, compute_reb
 from at_home_quant.regime.models import RegimeDecision, UniverseScore
 from at_home_quant.regime.service import get_current_regime
 from at_home_quant.selection.service import rank_universe
+from at_home_quant.etl.historical_load import run_full_history
+from at_home_quant.etl.daily_update import run_daily_update
 
 
 # ---------- Helpers ----------
@@ -41,23 +43,33 @@ from at_home_quant.selection.service import rank_universe
 def get_latest_price_date() -> Optional[datetime.date]:
     """Return the most recent price date in the database."""
     session = get_session()
+    if session is None:
+        return None
     try:
         return session.execute(select(func.max(PriceDaily.date))).scalar_one_or_none()
     except OperationalError:
         return None
     finally:
-        session.close()
+        try:
+            session.close()
+        except AttributeError:
+            pass
 
 
 def get_snapshot_dates() -> list[datetime.date]:
     """Return all available portfolio snapshot dates (descending)."""
     session = get_session()
+    if session is None:
+        return []
     try:
         dates = session.execute(select(PortfolioSnapshot.as_of_date)).scalars().all()
     except OperationalError:
         return []
     finally:
-        session.close()
+        try:
+            session.close()
+        except AttributeError:
+            pass
     return sorted(dates, reverse=True)
 
 
@@ -253,6 +265,37 @@ def show_performance_section() -> None:
         st.bar_chart(monthly_df.set_index("period_end")["alpha"])
 
 
+def show_admin_section() -> None:
+    require_streamlit()
+    st.header("Setup / Admin (Debug)")
+
+    st.write(
+        "Use these controls to populate or refresh the local database in this environment. "
+        "This is primarily for development and debugging. "
+        "Running the historical load may take some time."
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if st.button("Run Historical ETL"):
+            with st.spinner("Running historical data load..."):
+                try:
+                    run_full_history()
+                    st.success("Historical ETL completed successfully.")
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Historical ETL failed: {exc}")
+
+    with col2:
+        if st.button("Run Daily Update"):
+            with st.spinner("Running daily update..."):
+                try:
+                    run_daily_update()
+                    st.success("Daily update completed successfully.")
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Daily update failed: {exc}")
+
+
 # ---------- Entry point ----------
 
 def main() -> None:
@@ -268,6 +311,8 @@ def main() -> None:
     show_ranking_section()
     st.markdown("---")
     show_performance_section()
+    st.markdown("---")
+    show_admin_section()
 
 
 if __name__ == "__main__":
