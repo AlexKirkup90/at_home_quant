@@ -1,6 +1,4 @@
-import datetime
-
-from sqlalchemy import Column, Date, Enum, Float, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Column, Date, Enum, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import declarative_base, relationship
 
 from at_home_quant.data.tickers import TickerType, Universe
@@ -39,4 +37,16 @@ class PriceDaily(Base):
     ticker = relationship("Ticker", back_populates="prices")
 
 
-__all__ = ["Base", "Ticker", "PriceDaily"]
+class PortfolioSnapshot(Base):
+    __tablename__ = "portfolio_snapshots"
+    __table_args__ = (UniqueConstraint("as_of_date", name="uq_portfolio_as_of_date"),)
+
+    id = Column(Integer, primary_key=True)
+    as_of_date = Column(Date, nullable=False, index=True)
+    universe_name = Column(String, nullable=False)
+    equity_exposure = Column(Float, nullable=False)
+    defensive_exposure = Column(Float, nullable=False)
+    positions_json = Column(Text, nullable=False)
+
+
+__all__ = ["Base", "Ticker", "PriceDaily", "PortfolioSnapshot"]
