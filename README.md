@@ -98,3 +98,18 @@ python -m at_home_quant.scripts.print_rebalance --as-of 2025-02-28
 ```
 
 Snapshots are stored in the `portfolio_snapshots` table for historical inspection.
+
+## Performance & Alpha Measurement (Phase 5)
+
+Phase 5 measures how the constructed portfolio performs versus the best-scoring universe each month.
+
+- Monthly performance uses stored portfolio snapshots and DB price data to compute portfolio returns.
+- The benchmark for each month is chosen from NASDAQ100 (QQQ), S&P500 (SPY), or FTSE250 (VMID) based on the highest regime score at month-end.
+- Alpha is defined as `portfolio_return - benchmark_return` per month, with aggregates including CAGR, volatility, max drawdown, Sharpe, and cumulative alpha.
+- CLI helper:
+
+```bash
+python -m at_home_quant.scripts.print_performance [--csv performance.csv]
+```
+
+This prints monthly returns, benchmarks, and alpha along with summary statistics; the optional CSV flag exports the monthly series.
