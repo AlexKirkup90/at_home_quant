@@ -113,3 +113,26 @@ python -m at_home_quant.scripts.print_performance [--csv performance.csv]
 ```
 
 This prints monthly returns, benchmarks, and alpha along with summary statistics; the optional CSV flag exports the monthly series.
+
+## Running the Dashboard
+
+Phase 6 adds a local Streamlit dashboard for quick inspection of the regime engine, target portfolios, and performance.
+
+1. Install Streamlit (included in `requirements.txt`):
+
+```bash
+pip install -r requirements.txt
+```
+
+2. Launch the app:
+
+```bash
+streamlit run at_home_quant/app.py
+```
+
+The dashboard is organized into four sections:
+
+- **Regime & Universe Overview** – select a date to view the best universe, composite scores, and suggested equity exposure band.
+- **Current Portfolio & Rebalance** – build the monthly target portfolio, see sleeve weights, and view buy/sell/hold instructions for the selected date.
+- **Stock Ranking (Equity Sleeve Detail)** – choose a universe, date, and Top-N cutoff to inspect factor scores for the leading stocks.
+- **Performance & Alpha** – review monthly returns versus the benchmark-of-the-month and summary stats including CAGR, volatility, max drawdown, Sharpe, and cumulative alpha.

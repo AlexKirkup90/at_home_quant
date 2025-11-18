@@ -5,3 +5,4 @@ SQLAlchemy>=1.4
 python-dotenv
 yfinance
 pytest
+streamlit
