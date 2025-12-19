@@ -14,7 +14,7 @@ class Settings(BaseSettings):
         datetime.date(2000, 1, 1), description="Default start date for history fetches"
     )
     benchmark_tickers: List[str] = Field(
-        default_factory=lambda: ["QQQ", "SPY", "VUKE", "GLD", "IAU", "BIL"],
+        default_factory=lambda: ["QQQ", "SPY", "VMID", "GLD", "IAU", "BIL"],
         description="Default benchmark/asset tickers to fetch",
     )
 
