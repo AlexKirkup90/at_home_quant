@@ -41,18 +41,17 @@ def run_daily_update() -> None:
 
     with get_session() as session:
         latest_dates = _get_latest_dates(session)
+        symbols = _load_symbol_universe(session)
 
     today = datetime.date.today()
     fetch_start_by_symbol: dict[str, datetime.date] = {}
-    for symbol in list_all_symbols():
+    for symbol in symbols:
         last_date = latest_dates.get(symbol)
         if last_date:
             fetch_start_by_symbol[symbol] = last_date + datetime.timedelta(days=1)
         else:
             fetch_start_by_symbol[symbol] = settings.default_start_date
 
-    with get_session() as session:
-        symbols = _load_symbol_universe(session)
     frames = []
     for symbol in symbols:
         start_date = fetch_start_by_symbol[symbol]
