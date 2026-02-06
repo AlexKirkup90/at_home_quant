@@ -11,6 +11,10 @@ from sqlalchemy.orm import Session
 from at_home_quant.data.tickers import ALL_TICKERS, TickerInfo
 from at_home_quant.db.models import PriceDaily, Ticker
 
+_SQLITE_MAX_VARIABLES = 999
+_PRICE_UPSERT_COLUMNS = 9
+_PRICE_UPSERT_BATCH_SIZE = _SQLITE_MAX_VARIABLES // _PRICE_UPSERT_COLUMNS
+
 
 def upsert_tickers(session: Session, tickers: Mapping[str, TickerInfo] | Iterable[TickerInfo]) -> None:
     if isinstance(tickers, Mapping):
@@ -66,6 +70,14 @@ def upsert_prices(session: Session, price_df: pd.DataFrame) -> None:
         ticker_id = symbol_to_id.get(row["symbol"])
         if ticker_id is None:
             continue
+        close = row.get("close")
+        adj_close = row.get("adj_close")
+        if pd.isna(adj_close):
+            adj_close = close
+        if pd.isna(close):
+            close = adj_close
+        if pd.isna(close) or pd.isna(adj_close):
+            continue
         records.append(
             {
                 "ticker_id": ticker_id,
@@ -73,8 +85,8 @@ def upsert_prices(session: Session, price_df: pd.DataFrame) -> None:
                 "open": row.get("open"),
                 "high": row.get("high"),
                 "low": row.get("low"),
-                "close": row.get("close"),
-                "adj_close": row.get("adj_close"),
+                "close": close,
+                "adj_close": adj_close,
                 "volume": row.get("volume"),
                 "return_": row.get("return_"),
             }
@@ -83,20 +95,22 @@ def upsert_prices(session: Session, price_df: pd.DataFrame) -> None:
     if not records:
         return
 
-    stmt = sqlite_insert(PriceDaily).values(records)
-    stmt = stmt.on_conflict_do_update(
-        index_elements=[PriceDaily.ticker_id, PriceDaily.date],
-        set_={
-            "open": stmt.excluded.open,
-            "high": stmt.excluded.high,
-            "low": stmt.excluded.low,
-            "close": stmt.excluded.close,
-            "adj_close": stmt.excluded.adj_close,
-            "volume": stmt.excluded.volume,
-            "return_": stmt.excluded.return_,
-        },
-    )
-    session.execute(stmt)
+    for index in range(0, len(records), _PRICE_UPSERT_BATCH_SIZE):
+        batch = records[index:index + _PRICE_UPSERT_BATCH_SIZE]
+        stmt = sqlite_insert(PriceDaily).values(batch)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[PriceDaily.ticker_id, PriceDaily.date],
+            set_={
+                "open": stmt.excluded.open,
+                "high": stmt.excluded.high,
+                "low": stmt.excluded.low,
+                "close": stmt.excluded.close,
+                "adj_close": stmt.excluded.adj_close,
+                "volume": stmt.excluded.volume,
+                "return_": stmt.excluded.return_,
+            },
+        )
+        session.execute(stmt)
 
 
 def latest_price_date(session: Session, ticker_id: int) -> datetime.date | None:

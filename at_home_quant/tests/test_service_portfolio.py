@@ -1,6 +1,7 @@
 import datetime
 
 import pandas as pd
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
@@ -22,7 +23,7 @@ def _add_ticker(session: Session, info: TickerInfo) -> int:
     return ticker.id
 
 
-def _seed_prices(session: Session, as_of_date: datetime.date) -> None:
+def _seed_prices(session: Session, as_of_date: datetime.date, periods: int = 400) -> None:
     Base.metadata.create_all(bind=session.bind)
     ticker_ids: dict[str, int] = {}
     benchmark_symbols = ["QQQ", "SPY", "VMID", "GLD", "BIL"]
@@ -31,7 +32,7 @@ def _seed_prices(session: Session, as_of_date: datetime.date) -> None:
     for info in SAMPLE_NASDAQ100.values():
         ticker_ids[info.symbol] = _add_ticker(session, info)
 
-    dates = pd.bdate_range(end=as_of_date, periods=400)
+    dates = pd.bdate_range(end=as_of_date, periods=periods)
     slopes = {
         "QQQ": 0.2,
         "SPY": 0.1,
@@ -71,3 +72,12 @@ def test_end_to_end_portfolio_and_rebalance():
         assert all(instr.action in {"buy", "sell", "hold"} for instr in instructions)
         # Rebalance is read-only and must not write a new snapshot.
         assert session.query(PortfolioSnapshot).count() == 1
+
+
+def test_data_health_gate_blocks_portfolio_when_history_is_insufficient():
+    as_of = datetime.date(2025, 1, 31)
+    engine = create_engine("sqlite:///:memory:")
+    with Session(engine) as session:
+        _seed_prices(session, as_of, periods=120)
+        with pytest.raises(ValueError, match="Data health gate failed"):
+            build_monthly_portfolio(as_of, session=session)

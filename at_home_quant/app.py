@@ -25,7 +25,9 @@ except ImportError as exc:  # pragma: no cover - exercised in runtime, not tests
 else:
     STREAMLIT_IMPORT_ERROR = None
 
+from at_home_quant.config.settings import get_settings
 from at_home_quant.data.tickers import Universe
+from at_home_quant.data.health import get_data_health_report
 from at_home_quant.db.models import PortfolioSnapshot, PriceDaily
 from at_home_quant.db.session import get_session
 from at_home_quant.performance.models import MonthlyPerformance, PerformanceSummary
@@ -91,6 +93,52 @@ def require_streamlit() -> None:
         raise ImportError(
             "Streamlit is required for the dashboard. Install it with `pip install streamlit`."
         ) from STREAMLIT_IMPORT_ERROR
+
+
+def _mode_badge_html(mode: str, gate_enabled: bool) -> str:
+    if mode.lower() == "production":
+        mode_bg = "#7f1d1d"
+        mode_label = "PRODUCTION"
+    else:
+        mode_bg = "#1d4ed8"
+        mode_label = "RESEARCH"
+    gate_bg = "#14532d" if gate_enabled else "#6b7280"
+    gate_label = "HEALTH GATE ON" if gate_enabled else "HEALTH GATE OFF"
+    return (
+        "<div style='display:flex;gap:8px;justify-content:flex-end;margin-top:8px;'>"
+        f"<span style='background:{mode_bg};color:#fff;padding:4px 10px;border-radius:999px;"
+        "font-size:12px;font-weight:700;letter-spacing:0.4px;'>"
+        f"{mode_label}</span>"
+        f"<span style='background:{gate_bg};color:#fff;padding:4px 10px;border-radius:999px;"
+        "font-size:12px;font-weight:700;letter-spacing:0.4px;'>"
+        f"{gate_label}</span>"
+        "</div>"
+    )
+
+
+def show_data_health_panel() -> None:
+    require_streamlit()
+    settings = get_settings()
+    latest_date = get_latest_price_date()
+    as_of_date = latest_date or datetime.date.today()
+    report = get_data_health_report(as_of_date=as_of_date)
+
+    st.subheader("Data Health")
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Mode", settings.data_mode.upper())
+    col2.metric("Health Gate", "ON" if settings.enforce_data_health_gate else "OFF")
+    col3.metric("As-of Date", as_of_date.isoformat())
+    col4.metric("Latest Price Date", latest_date.isoformat() if latest_date else "N/A")
+    st.caption("Required symbols: " + ", ".join(report.required_symbols))
+
+    if report.is_healthy:
+        st.success("Data health is healthy for the current as-of date.")
+    else:
+        st.error("Data health has issues that can block portfolio and rebalance operations.")
+        issues_df = pd.DataFrame(
+            [{"code": issue.code, "message": issue.message} for issue in report.issues]
+        )
+        st.dataframe(issues_df, use_container_width=True, hide_index=True)
 
 
 # ---------- UI Sections ----------
@@ -161,6 +209,13 @@ def show_portfolio_section() -> None:
     selected_date = st.date_input("Portfolio as-of date", value=latest_price_date, max_value=latest_price_date)
     top_n = st.slider("Top N equities", min_value=1, max_value=50, value=15, key="portfolio_top_n")
     threshold = st.slider("Rebalance threshold (%)", min_value=0.0, max_value=5.0, value=0.5, step=0.1) / 100
+    health_report = get_data_health_report(as_of_date=selected_date)
+    if not health_report.is_healthy:
+        st.error("Data health gate failed for the selected as-of date.")
+        for issue in health_report.issue_messages():
+            st.caption(f"- {issue}")
+        return
+    st.caption(f"Data health check passed for {selected_date.isoformat()}.")
 
     try:
         target_portfolio = build_monthly_portfolio(
@@ -309,9 +364,19 @@ def show_admin_section() -> None:
 def main() -> None:
     require_streamlit()
     st.set_page_config(page_title="At-Home Quant Dashboard", layout="wide")
-    st.title("At-Home Quant Dashboard")
-    st.caption("Local-only dashboard for regimes, portfolios, and performance.")
+    settings = get_settings()
+    title_col, badge_col = st.columns([4, 2])
+    with title_col:
+        st.title("At-Home Quant Dashboard")
+        st.caption("Local-only dashboard for regimes, portfolios, and performance.")
+    with badge_col:
+        st.markdown(
+            _mode_badge_html(settings.data_mode, settings.enforce_data_health_gate),
+            unsafe_allow_html=True,
+        )
 
+    show_data_health_panel()
+    st.markdown("---")
     show_regime_section()
     st.markdown("---")
     show_portfolio_section()

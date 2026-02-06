@@ -52,6 +52,8 @@ def normalize_yfinance_prices(df: pd.DataFrame, symbol: str | None = None) -> pd
 
     if "adj_close" in normalized.columns:
         normalized["close"] = normalized["adj_close"]
+    elif "close" in normalized.columns:
+        normalized["adj_close"] = normalized["close"]
 
     if "date" in normalized.columns:
         normalized["date"] = pd.to_datetime(normalized["date"])
@@ -68,6 +70,9 @@ def normalize_yfinance_prices(df: pd.DataFrame, symbol: str | None = None) -> pd
     ]
     columns = [col for col in desired_order if col in normalized.columns]
     normalized = normalized[columns]
+    normalized = normalized.dropna(subset=["date", "symbol", "close"], how="any")
+    if "adj_close" in normalized.columns:
+        normalized["adj_close"] = normalized["adj_close"].fillna(normalized["close"])
 
     normalized = normalized.sort_values(["symbol", "date"]).reset_index(drop=True)
     required = {"date", "symbol", "close"}

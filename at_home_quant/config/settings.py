@@ -1,6 +1,6 @@
 import datetime
 from pathlib import Path
-from typing import List
+from typing import List, Literal
 
 from pydantic.v1 import BaseSettings, Field
 
@@ -13,13 +13,33 @@ class Settings(BaseSettings):
     default_start_date: datetime.date = Field(
         datetime.date(2000, 1, 1), description="Default start date for history fetches"
     )
+    data_mode: Literal["research", "production"] = Field(
+        "production",
+        description="Data behavior mode. 'research' allows synthetic fallback; 'production' fails on missing vendor data.",
+    )
+    enforce_data_health_gate: bool = Field(
+        True,
+        description="If true, portfolio construction/rebalance is blocked when data health checks fail.",
+    )
+    min_history_days_for_regime: int = Field(
+        252,
+        description="Minimum historical observations required for regime benchmark symbols.",
+    )
+    max_symbol_staleness_days: int = Field(
+        5,
+        description="Maximum allowed lag (days) between required symbol data and the requested as-of date.",
+    )
     benchmark_tickers: List[str] = Field(
-        default_factory=lambda: ["QQQ", "SPY", "VUKE", "GLD", "IAU", "BIL"],
+        default_factory=lambda: ["QQQ", "SPY", "VMID", "GLD", "IAU", "BIL"],
         description="Default benchmark/asset tickers to fetch",
     )
 
     class Config:
         env_file = ".env"
+
+    @property
+    def allow_synthetic_data(self) -> bool:
+        return self.data_mode == "research"
 
 
 def get_settings() -> Settings:

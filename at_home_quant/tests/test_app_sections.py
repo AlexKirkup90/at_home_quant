@@ -147,3 +147,13 @@ def test_show_regime_section_renders_when_data_exists(monkeypatch):
     assert not fake_streamlit.warnings
     assert fake_streamlit.metrics
     assert fake_streamlit.dataframes
+
+
+def test_mode_badge_html_contains_mode_and_gate_labels():
+    production = app_module._mode_badge_html("production", True)
+    research = app_module._mode_badge_html("research", False)
+
+    assert "PRODUCTION" in production
+    assert "HEALTH GATE ON" in production
+    assert "RESEARCH" in research
+    assert "HEALTH GATE OFF" in research

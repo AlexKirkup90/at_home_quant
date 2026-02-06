@@ -7,6 +7,7 @@ from typing import List
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from at_home_quant.data.health import assert_data_health_for_portfolio
 from at_home_quant.db.models import Base, PortfolioSnapshot
 from at_home_quant.db.session import get_session
 from at_home_quant.portfolio.models import RebalanceInstruction, TargetPortfolio, TargetPosition
@@ -80,6 +81,7 @@ def build_monthly_portfolio(
     session: Session | None = None,
 ) -> TargetPortfolio:
     def _build(session_obj: Session) -> TargetPortfolio:
+        assert_data_health_for_portfolio(as_of_date, session=session_obj)
         regime = get_current_regime(as_of_date, session=session_obj)
         best_universe = regime.best_universe
         best_score = next(

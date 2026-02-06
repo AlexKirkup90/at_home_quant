@@ -1,12 +1,15 @@
 import datetime
 
+import numpy as np
 import pandas as pd
+import pytest
 
 from at_home_quant.data import fetcher
 from at_home_quant.data.tickers import BENCHMARKS
 
 
-def test_fetch_price_history_has_required_columns():
+def test_fetch_price_history_has_required_columns(monkeypatch):
+    monkeypatch.setenv("DATA_MODE", "research")
     start = datetime.date.today() - datetime.timedelta(days=90)
     df = fetcher.fetch_price_history(BENCHMARKS["GLD"], start=start)
     assert set(fetcher.REQUIRED_COLUMNS).issubset(df.columns)
@@ -42,3 +45,39 @@ def test_compute_returns_monotonic_sorting():
         assert group["date"].is_monotonic_increasing
         assert group.iloc[0]["return_"] == 0.0
         assert group.iloc[1]["return_"] > 0.0
+
+
+@pytest.mark.parametrize("symbol_level_first", [True, False])
+def test_normalize_df_handles_single_symbol_multiindex(symbol_level_first: bool):
+    symbol = "QQQ"
+    dates = pd.bdate_range("2025-01-01", periods=4)
+    fields = ["Open", "High", "Low", "Close", "Adj Close", "Volume"]
+    if symbol_level_first:
+        columns = pd.MultiIndex.from_product([[symbol], fields])
+    else:
+        columns = pd.MultiIndex.from_product([fields, [symbol]])
+    values = np.arange(len(dates) * len(columns), dtype=float).reshape(len(dates), len(columns))
+    raw = pd.DataFrame(values, index=dates, columns=columns)
+
+    normalized = fetcher._normalize_df(raw, symbol)
+
+    assert set(fetcher.REQUIRED_COLUMNS).issubset(normalized.columns)
+    assert set(normalized["symbol"]) == {symbol}
+    assert normalized["date"].is_monotonic_increasing
+
+
+def test_fetch_price_history_production_mode_raises_on_empty_download(monkeypatch):
+    monkeypatch.setenv("DATA_MODE", "production")
+    monkeypatch.setattr(fetcher.yf, "download", lambda *args, **kwargs: pd.DataFrame())
+
+    with pytest.raises(RuntimeError, match="No market data returned"):
+        fetcher.fetch_price_history("QQQ", start=datetime.date(2025, 1, 1))
+
+
+def test_fetch_price_history_research_mode_uses_synthetic_on_empty_download(monkeypatch):
+    monkeypatch.setenv("DATA_MODE", "research")
+    monkeypatch.setattr(fetcher.yf, "download", lambda *args, **kwargs: pd.DataFrame())
+
+    df = fetcher.fetch_price_history("QQQ", start=datetime.date(2025, 1, 1))
+    assert not df.empty
+    assert set(fetcher.REQUIRED_COLUMNS).issubset(df.columns)

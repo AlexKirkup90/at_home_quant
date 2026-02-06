@@ -27,6 +27,13 @@ pip install -r requirements.txt
 
 Set `DATABASE_URL` in a `.env` file or environment variable to override the default SQLite database (`sqlite:///./data/quant.db`).
 
+Data mode and health-gate controls:
+
+- `DATA_MODE=research|production` (defaults to `production`; `research` allows synthetic fallback when vendor data is unavailable).
+- `ENFORCE_DATA_HEALTH_GATE=true|false` (when true, portfolio/rebalance actions are blocked if required symbols are stale/missing).
+- `MIN_HISTORY_DAYS_FOR_REGIME=252` (minimum observations required for regime benchmark symbols).
+- `MAX_SYMBOL_STALENESS_DAYS=5` (maximum acceptable lag from requested as-of date).
+
 3. **Run the initial historical ETL**
 
 ```bash
