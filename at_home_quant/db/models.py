@@ -81,6 +81,58 @@ class BacktestRun(Base):
     monthly_results_json = Column(Text, nullable=False)
 
 
+class AdvisorPortfolioSnapshot(Base):
+    __tablename__ = "advisor_portfolio_snapshots"
+
+    id = Column(Integer, primary_key=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow, index=True)
+    as_of_date = Column(Date, nullable=False, index=True)
+    snapshot_type = Column(String, nullable=False, index=True)  # baseline|executed|model_target
+    source = Column(String, nullable=False, default="app", index=True)
+    universe_name = Column(String, nullable=False)
+    equity_exposure = Column(Float, nullable=False)
+    defensive_exposure = Column(Float, nullable=False)
+    positions_json = Column(Text, nullable=False)
+
+
+class WeeklyRecommendationBatch(Base):
+    __tablename__ = "weekly_recommendation_batches"
+
+    id = Column(Integer, primary_key=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow, index=True)
+    as_of_date = Column(Date, nullable=False, index=True)
+    best_universe = Column(String, nullable=False)
+    best_universe_score = Column(Float, nullable=False)
+    status = Column(String, nullable=False, default="open", index=True)  # open|closed
+    watchlist_json = Column(Text, nullable=False, default="[]")
+
+
+class WeeklyRecommendationItem(Base):
+    __tablename__ = "weekly_recommendation_items"
+
+    id = Column(Integer, primary_key=True)
+    batch_id = Column(Integer, ForeignKey("weekly_recommendation_batches.id"), nullable=False, index=True)
+    ticker = Column(String, nullable=False, index=True)
+    recommendation = Column(String, nullable=False)  # buy|sell|hold
+    current_weight = Column(Float, nullable=False)
+    target_weight = Column(Float, nullable=False)
+    delta = Column(Float, nullable=False)
+    rationale = Column(Text, nullable=False)
+
+
+class RecommendationDecision(Base):
+    __tablename__ = "recommendation_decisions"
+    __table_args__ = (UniqueConstraint("item_id", name="uq_recommendation_decision_item"),)
+
+    id = Column(Integer, primary_key=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow, index=True)
+    updated_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow)
+    item_id = Column(Integer, ForeignKey("weekly_recommendation_items.id"), nullable=False, index=True)
+    decision = Column(String, nullable=False)  # follow|ignore|partial
+    executed_weight = Column(Float, nullable=True)
+    note = Column(Text, nullable=True)
+
+
 __all__ = [
     "Base",
     "Ticker",
@@ -88,4 +140,8 @@ __all__ = [
     "PortfolioSnapshot",
     "UniverseMembership",
     "BacktestRun",
+    "AdvisorPortfolioSnapshot",
+    "WeeklyRecommendationBatch",
+    "WeeklyRecommendationItem",
+    "RecommendationDecision",
 ]

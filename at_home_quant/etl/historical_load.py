@@ -5,11 +5,13 @@ from typing import Sequence
 
 import pandas as pd
 import yfinance as yf
+from sqlalchemy import select
 
 from at_home_quant.config.settings import get_settings
 from at_home_quant.data.fetcher import compute_returns
 from at_home_quant.data.tickers import ALL_TICKERS, list_all_symbols
 from at_home_quant.db import crud
+from at_home_quant.db.models import Ticker
 from at_home_quant.db.session import get_session, init_db
 
 
@@ -87,9 +89,12 @@ def run_full_history(start: datetime.date | None = None, end: datetime.date | No
     init_db()
     with get_session() as session:
         crud.upsert_tickers(session, ALL_TICKERS)
+        symbols: Sequence[str] = sorted(
+            set(list_all_symbols())
+            | set(session.execute(select(Ticker.symbol).order_by(Ticker.symbol)).scalars().all())
+        )
 
     start_date = start or settings.default_start_date
-    symbols: Sequence[str] = list_all_symbols()
 
     raw_prices = yf.download(
         tickers=" ".join(symbols),

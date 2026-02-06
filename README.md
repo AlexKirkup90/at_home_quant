@@ -166,7 +166,29 @@ streamlit run at_home_quant/app.py
 
 The dashboard is organized into four sections:
 
+- **Portfolio Onboarding** – paste your current live holdings (ticker + weight) and save an anchor portfolio snapshot that future rebalance recommendations use as the baseline.
 - **Regime & Universe Overview** – select a date to view the best universe, composite scores, and suggested equity exposure band.
 - **Current Portfolio & Rebalance** – build the monthly target portfolio, see sleeve weights, and view buy/sell/hold instructions for the selected date.
 - **Stock Ranking (Equity Sleeve Detail)** – choose a universe, date, and Top-N cutoff to inspect factor scores for the leading stocks.
 - **Performance & Alpha** – tune benchmark timing and implementation cost assumptions, then review monthly net/gross returns, turnover/cost history, and summary diagnostics (including tracking error and information ratio).
+
+## Weekly Advisor Workflow (UI)
+
+The app now defaults to a guided **Weekly Advisor** tab with repeatable steps:
+
+1. Sync data
+2. Confirm current holdings
+3. Generate weekly recommendation
+4. Log `follow|ignore|partial` decisions per recommendation
+5. Save executed portfolio from decision log
+6. Review weekly report + near-buy watchlist
+
+Technical and debug views (ETL controls, deep diagnostics, factor tables) are moved under the **Advanced** tab.
+
+For backend automation, you can run the weekly cycle from terminal:
+
+```bash
+python -m at_home_quant.scripts.run_weekly_cycle
+```
+
+This runs daily data sync and generates a fresh weekly recommendation batch using the latest available price date.

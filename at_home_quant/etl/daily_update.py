@@ -28,6 +28,11 @@ def _get_latest_dates(session) -> dict[str, datetime.date | None]:
     return latest
 
 
+def _load_symbol_universe(session) -> list[str]:
+    db_symbols = session.execute(select(Ticker.symbol).order_by(Ticker.symbol)).scalars().all()
+    return sorted(set(list_all_symbols()) | set(db_symbols))
+
+
 def run_daily_update() -> None:
     settings = get_settings()
     init_db()
@@ -46,7 +51,8 @@ def run_daily_update() -> None:
         else:
             fetch_start_by_symbol[symbol] = settings.default_start_date
 
-    symbols: Sequence[str] = list_all_symbols()
+    with get_session() as session:
+        symbols = _load_symbol_universe(session)
     frames = []
     for symbol in symbols:
         start_date = fetch_start_by_symbol[symbol]

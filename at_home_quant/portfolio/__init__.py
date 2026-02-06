@@ -5,7 +5,11 @@ from at_home_quant.portfolio.models import (
     TargetPortfolio,
     TargetPosition,
 )
-from at_home_quant.portfolio.service import build_monthly_portfolio, compute_rebalance
+from at_home_quant.portfolio.service import (
+    build_monthly_portfolio,
+    compute_rebalance,
+    save_manual_portfolio_snapshot,
+)
 
 __all__ = [
     "RebalanceInstruction",
@@ -15,4 +19,5 @@ __all__ = [
     "TargetPosition",
     "build_monthly_portfolio",
     "compute_rebalance",
+    "save_manual_portfolio_snapshot",
 ]

@@ -326,6 +326,34 @@ def _risk_violation_summary(report: PortfolioRiskReport) -> str:
     return "; ".join(item.message for item in report.violations)
 
 
+def save_manual_portfolio_snapshot(
+    as_of_date: datetime.date,
+    positions: list[TargetPosition],
+    universe_name: str = "USER_BASELINE",
+    session: Session | None = None,
+) -> TargetPortfolio:
+    equity_exposure = sum(position.weight for position in positions if position.asset_type == "equity")
+    defensive_exposure = max(0.0, 1.0 - equity_exposure)
+    portfolio = TargetPortfolio(
+        as_of_date=as_of_date,
+        positions=positions,
+        universe_name=universe_name,
+        equity_exposure=equity_exposure,
+        defensive_exposure=defensive_exposure,
+    )
+    portfolio.validate()
+
+    def _save(session_obj: Session) -> TargetPortfolio:
+        _save_snapshot(session_obj, portfolio)
+        return portfolio
+
+    if session is not None:
+        return _save(session)
+
+    with get_session() as session_obj:
+        return _save(session_obj)
+
+
 def build_monthly_portfolio(
     as_of_date: datetime.date,
     top_n: int = 15,
@@ -445,4 +473,4 @@ def compute_rebalance(
         return _compute(session_obj)
 
 
-__all__ = ["build_monthly_portfolio", "compute_rebalance"]
+__all__ = ["build_monthly_portfolio", "compute_rebalance", "save_manual_portfolio_snapshot"]

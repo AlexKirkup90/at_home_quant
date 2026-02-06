@@ -157,3 +157,11 @@ def test_mode_badge_html_contains_mode_and_gate_labels():
     assert "HEALTH GATE ON" in production
     assert "RESEARCH" in research
     assert "HEALTH GATE OFF" in research
+
+
+def test_parse_holdings_text_supports_tab_and_percent_formats():
+    positions = app_module.parse_holdings_text("VHYL\t50%\nVUSA\t40%\nSGLN\t10%")
+    assert len(positions) == 3
+    assert positions[0].ticker == "VHYL"
+    assert abs(sum(position.weight for position in positions) - 1.0) < 1e-6
+    assert any(position.asset_type == "gold" for position in positions)

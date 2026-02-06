@@ -8,7 +8,12 @@ from sqlalchemy.orm import Session
 
 from at_home_quant.data.tickers import BENCHMARKS, SAMPLE_NASDAQ100, TickerInfo
 from at_home_quant.db.models import Base, PortfolioSnapshot, PriceDaily, Ticker
-from at_home_quant.portfolio.service import build_monthly_portfolio, compute_rebalance
+from at_home_quant.portfolio.models import TargetPosition
+from at_home_quant.portfolio.service import (
+    build_monthly_portfolio,
+    compute_rebalance,
+    save_manual_portfolio_snapshot,
+)
 
 
 def _add_ticker(session: Session, info: TickerInfo) -> int:
@@ -108,3 +113,26 @@ def test_risk_overlay_blocks_snapshot_save_when_constraints_breached(monkeypatch
         monkeypatch.setenv("RISK_MAX_POSITION", "0.12")
         with pytest.raises(ValueError, match="Risk overlay gate failed"):
             build_monthly_portfolio(as_of_second, session=session)
+
+
+def test_save_manual_portfolio_snapshot_persists_anchor():
+    as_of = datetime.date(2025, 1, 31)
+    engine = create_engine("sqlite:///:memory:")
+    with Session(engine) as session:
+        _seed_prices(session, as_of)
+        portfolio = save_manual_portfolio_snapshot(
+            as_of_date=as_of,
+            positions=[
+                TargetPosition("VUSA", 0.50, "equity"),
+                TargetPosition("SGLN", 0.25, "gold"),
+                TargetPosition("VAGS", 0.25, "cash"),
+            ],
+            session=session,
+        )
+        assert portfolio.universe_name == "USER_BASELINE"
+        assert abs(portfolio.equity_exposure - 0.50) < 1e-6
+        assert abs(portfolio.defensive_exposure - 0.50) < 1e-6
+        saved = session.query(PortfolioSnapshot).filter(PortfolioSnapshot.as_of_date == as_of).one()
+        saved_positions = json.loads(saved.positions_json)
+        assert len(saved_positions) == 3
+        assert saved_positions[0]["ticker"] == "VUSA"
