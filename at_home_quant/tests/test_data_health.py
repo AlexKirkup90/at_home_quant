@@ -4,7 +4,7 @@ import pandas as pd
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from at_home_quant.data.health import get_data_health_report
+from at_home_quant.data.health import get_data_health_report, get_portfolio_required_symbols
 from at_home_quant.data.tickers import BENCHMARKS
 from at_home_quant.db.models import AdvisorPortfolioSnapshot, Base, PriceDaily, Ticker
 
@@ -93,3 +93,38 @@ def test_data_health_report_includes_live_holdings_from_advisor_snapshots():
     assert "CUSTOMX" in report.required_symbols
     assert not report.is_healthy
     assert any(issue.code == "missing_symbol_history" and "CUSTOMX" in issue.message for issue in report.issues)
+
+
+def test_portfolio_required_symbols_uses_latest_snapshot_without_multiple_rows_error():
+    as_of = datetime.date(2025, 1, 31)
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(bind=engine)
+
+    with Session(engine) as session:
+        session.add(
+            AdvisorPortfolioSnapshot(
+                as_of_date=as_of - datetime.timedelta(days=7),
+                snapshot_type="executed",
+                source="test",
+                universe_name="USER_BASELINE",
+                equity_exposure=1.0,
+                defensive_exposure=0.0,
+                positions_json='[{"ticker":"OLDX","weight":1.0,"asset_type":"equity"}]',
+            )
+        )
+        session.add(
+            AdvisorPortfolioSnapshot(
+                as_of_date=as_of,
+                snapshot_type="executed",
+                source="test",
+                universe_name="USER_BASELINE",
+                equity_exposure=1.0,
+                defensive_exposure=0.0,
+                positions_json='[{"ticker":"NEWX","weight":1.0,"asset_type":"equity"}]',
+            )
+        )
+        session.commit()
+
+        required = get_portfolio_required_symbols(as_of_date=as_of, session=session)
+
+    assert "NEWX" in required

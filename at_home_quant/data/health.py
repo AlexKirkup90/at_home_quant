@@ -80,6 +80,7 @@ def _load_live_holdings_symbols(
                 AdvisorPortfolioSnapshot.as_of_date.desc(),
                 AdvisorPortfolioSnapshot.created_at.desc(),
             )
+            .limit(1)
         ).scalar_one_or_none()
         if row is None:
             continue
