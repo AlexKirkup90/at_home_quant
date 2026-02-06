@@ -77,6 +77,7 @@ def test_run_backend_pipeline_creates_layer_snapshots(monkeypatch):
     monkeypatch.setattr(backend_service_module, "get_session", session_override)
     monkeypatch.setattr(backend_service_module, "init_db", lambda: None)
     monkeypatch.setattr(backend_service_module, "run_daily_update", lambda: None)
+    monkeypatch.setattr(backend_service_module, "run_fundamentals_update", lambda **_kwargs: 0)
 
     result = backend_service_module.run_backend_pipeline(
         as_of_date=datetime.date(2025, 2, 28),
@@ -119,6 +120,7 @@ def test_run_backend_pipeline_marks_failed_on_empty_data(monkeypatch):
     monkeypatch.setattr(backend_service_module, "get_session", session_override)
     monkeypatch.setattr(backend_service_module, "init_db", lambda: None)
     monkeypatch.setattr(backend_service_module, "run_daily_update", lambda: None)
+    monkeypatch.setattr(backend_service_module, "run_fundamentals_update", lambda **_kwargs: 0)
 
     try:
         backend_service_module.run_backend_pipeline(include_weekly_recommendation=False, retries=0)
@@ -159,6 +161,7 @@ def test_run_backend_pipeline_persists_layer_prices_with_small_insert_batches(mo
     monkeypatch.setattr(backend_service_module, "get_session", session_override)
     monkeypatch.setattr(backend_service_module, "init_db", lambda: None)
     monkeypatch.setattr(backend_service_module, "run_daily_update", lambda: None)
+    monkeypatch.setattr(backend_service_module, "run_fundamentals_update", lambda **_kwargs: 0)
     monkeypatch.setattr(backend_service_module, "SQLITE_SAFE_INSERT_BATCH_SIZE", 1)
 
     result = backend_service_module.run_backend_pipeline(

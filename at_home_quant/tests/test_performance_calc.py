@@ -5,7 +5,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from at_home_quant.data.tickers import TickerInfo, TickerType, Universe
-from at_home_quant.db.models import Base, PortfolioSnapshot, PriceDaily, Ticker
+from at_home_quant.db.models import AdvisorPortfolioSnapshot, Base, PortfolioSnapshot, PriceDaily, Ticker
 from at_home_quant.performance.calc import (
     compute_benchmark_return_for_period,
     compute_monthly_performance_series,
@@ -327,3 +327,81 @@ def test_compute_monthly_performance_series_applies_turnover_costs(session: Sess
     assert pytest.approx(item.portfolio_turnover) == 1.0
     assert pytest.approx(item.transaction_cost) == 0.002
     assert pytest.approx(item.portfolio_return) == 0.018
+
+
+def test_compute_monthly_performance_prefers_advisor_executed_snapshots(session: Session):
+    benchmark_info = TickerInfo("QQQ", "QQQ", TickerType.ETF, Universe.NASDAQ100)
+    benchmark_id = _add_ticker(session, benchmark_info)
+    aaa_info = TickerInfo("AAA", "AAA", TickerType.EQUITY, Universe.NASDAQ100)
+    aaa_id = _add_ticker(session, aaa_info)
+    bbb_info = TickerInfo("BBB", "BBB", TickerType.EQUITY, Universe.NASDAQ100)
+    bbb_id = _add_ticker(session, bbb_info)
+
+    start = datetime.date(2025, 1, 31)
+    end = datetime.date(2025, 2, 28)
+    _add_price(session, benchmark_id, start, 100)
+    _add_price(session, benchmark_id, end, 100)
+    _add_price(session, aaa_id, start, 100)
+    _add_price(session, aaa_id, end, 102)
+    _add_price(session, bbb_id, start, 100)
+    _add_price(session, bbb_id, end, 100)
+    session.commit()
+
+    session.add_all(
+        [
+            PortfolioSnapshot(
+                as_of_date=start,
+                universe_name="NASDAQ100",
+                equity_exposure=1.0,
+                defensive_exposure=0.0,
+                positions_json='[{"ticker": "AAA", "weight": 1.0, "asset_type": "equity"}]',
+            ),
+            PortfolioSnapshot(
+                as_of_date=end,
+                universe_name="NASDAQ100",
+                equity_exposure=1.0,
+                defensive_exposure=0.0,
+                positions_json='[{"ticker": "AAA", "weight": 1.0, "asset_type": "equity"}]',
+            ),
+            AdvisorPortfolioSnapshot(
+                as_of_date=start,
+                snapshot_type="executed",
+                source="test",
+                universe_name="NASDAQ100",
+                equity_exposure=1.0,
+                defensive_exposure=0.0,
+                positions_json='[{"ticker": "BBB", "weight": 1.0, "asset_type": "equity"}]',
+            ),
+            AdvisorPortfolioSnapshot(
+                as_of_date=end,
+                snapshot_type="executed",
+                source="test",
+                universe_name="NASDAQ100",
+                equity_exposure=1.0,
+                defensive_exposure=0.0,
+                positions_json='[{"ticker": "BBB", "weight": 1.0, "asset_type": "equity"}]',
+            ),
+        ]
+    )
+    session.commit()
+
+    score = UniverseScore(
+        as_of_date=start,
+        universe_name="NASDAQ100",
+        composite_score=1.0,
+        trend=0,
+        momentum_6m=0,
+        momentum_12m=0,
+        momentum_rank=1,
+        realized_vol=0,
+        drawdown=0,
+        suggested_equity_min=0,
+        suggested_equity_max=1,
+    )
+    regime = RegimeDecision(as_of_date=start, best_universe="NASDAQ100", best_universe_score=1.0, all_universe_scores=[score])
+    performances = compute_monthly_performance_series(
+        session=session,
+        regime_getter=lambda *_args, **_kwargs: regime,
+    )
+    assert len(performances) == 1
+    assert pytest.approx(performances[0].portfolio_return) == 0.0

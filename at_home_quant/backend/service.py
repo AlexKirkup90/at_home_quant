@@ -17,6 +17,7 @@ from at_home_quant.data.quality import evaluate_price_quality
 from at_home_quant.db.models import BackendRun, DataLayerPrice, DatasetSnapshot, PriceDaily, Ticker
 from at_home_quant.db.session import get_session, init_db
 from at_home_quant.etl.daily_update import run_daily_update
+from at_home_quant.etl.fundamentals_update import run_fundamentals_update
 from at_home_quant.research.registry import complete_experiment, register_experiment
 
 
@@ -166,6 +167,12 @@ def run_backend_pipeline(
                     clean_df["adj_close"] = clean_df["adj_close"].fillna(clean_df["close"])
                     clean_df["close"] = clean_df["close"].fillna(clean_df["adj_close"])
                     clean_df = clean_df.dropna(subset=["symbol", "date", "close", "adj_close"])
+                run_fundamentals_update(
+                    as_of_date=resolved_as_of,
+                    symbols=(sorted(clean_df["symbol"].unique()) if not clean_df.empty else None),
+                    session=session,
+                    fail_on_error=False,
+                )
                 feature_df = compute_returns(
                     clean_df[["date", "symbol", "open", "high", "low", "close", "adj_close", "volume"]]
                     if not clean_df.empty

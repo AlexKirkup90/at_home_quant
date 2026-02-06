@@ -32,6 +32,7 @@ from at_home_quant.backend.service import run_backend_pipeline
 from at_home_quant.advisor.models import WorkflowDecisionInput
 from at_home_quant.advisor.service import (
     get_latest_advisor_portfolio,
+    get_weekly_outcome_report,
     get_latest_weekly_report,
     log_decision,
     save_advisor_portfolio_snapshot,
@@ -282,9 +283,28 @@ def show_weekly_advisor_section() -> None:
     st.caption(
         "Runs ETL sync, quality gates, versioned data snapshots, experiment registration, and recommendation generation."
     )
+    force_rerun = st.checkbox(
+        "Force rerun even if recommendation already exists for this date",
+        value=False,
+        key="weekly_force_rerun",
+    )
     if st.button("Step 1: Run Backend Pipeline", key="weekly_step1"):
         with st.spinner("Running backend pipeline..."):
             try:
+                existing_report = get_latest_weekly_report(as_of_date=as_of_date)
+                if (
+                    existing_report is not None
+                    and existing_report.as_of_date == as_of_date
+                    and existing_report.experiment_id is not None
+                    and not st.session_state.get("weekly_holdings_refresh_required")
+                    and not force_rerun
+                ):
+                    st.info(
+                        f"Recommendation batch {existing_report.batch_id} already exists for "
+                        f"{as_of_date.isoformat()}. Enable force rerun to rebuild."
+                    )
+                    st.caption(f"experiment={existing_report.experiment_id}")
+                    return
                 result = run_backend_pipeline(
                     as_of_date=as_of_date,
                     include_weekly_recommendation=True,
@@ -329,12 +349,6 @@ def show_weekly_advisor_section() -> None:
                 positions=positions,
                 snapshot_type="executed",
                 source="weekly_step2",
-                universe_name="USER_BASELINE",
-            )
-            # Keep legacy snapshot table in sync for existing modules.
-            save_manual_portfolio_snapshot(
-                as_of_date=as_of_date,
-                positions=positions,
                 universe_name="USER_BASELINE",
             )
             st.success(
@@ -436,12 +450,6 @@ def show_weekly_advisor_section() -> None:
     if st.button("Step 4: Save Executed Portfolio From Decisions", key="weekly_step4"):
         try:
             result = save_executed_from_decisions(report.batch_id)
-            # Keep legacy snapshot table in sync for existing modules.
-            save_manual_portfolio_snapshot(
-                as_of_date=result.as_of_date,
-                positions=result.positions,
-                universe_name="EXECUTED_FROM_DECISIONS",
-            )
             st.success(
                 f"Saved executed portfolio for {result.as_of_date.isoformat()} "
                 f"(followed={result.followed_items}, ignored={result.ignored_items}, partial={result.partial_items})."
@@ -499,6 +507,49 @@ def show_weekly_advisor_section() -> None:
     else:
         watch_df = pd.DataFrame([asdict(item) for item in report.watchlist])
         st.dataframe(watch_df, use_container_width=True, hide_index=True)
+
+    st.markdown("**Decision Outcome Attribution**")
+    outcome_horizon_days = st.slider(
+        "Outcome horizon (calendar days)",
+        min_value=3,
+        max_value=30,
+        value=7,
+        key="weekly_outcome_horizon_days",
+    )
+    try:
+        outcome_report = get_weekly_outcome_report(
+            batch_id=report.batch_id,
+            horizon_days=outcome_horizon_days,
+        )
+    except Exception as exc:  # noqa: BLE001
+        outcome_report = None
+        st.caption(f"Outcome attribution unavailable: {exc}")
+
+    if outcome_report is None:
+        st.caption("Outcome attribution not available yet (insufficient forward price history).")
+    else:
+        ocol1, ocol2, ocol3, ocol4 = st.columns(4)
+        ocol1.metric("Eval Date", outcome_report.evaluation_date.isoformat())
+        ocol2.metric("Model Active Return", _format_pct(outcome_report.model_active_return))
+        ocol3.metric("Decision Active Return", _format_pct(outcome_report.decision_active_return))
+        ocol4.metric("Decision Alpha", _format_pct(outcome_report.decision_alpha))
+        st.caption(
+            f"Follow hit rate: "
+            f"{'N/A' if outcome_report.follow_hit_rate is None else f'{outcome_report.follow_hit_rate:.0%}'} | "
+            f"Ignored positive opportunities: {outcome_report.ignored_positive_count}"
+        )
+        outcome_df = pd.DataFrame([asdict(item) for item in outcome_report.items])
+        for column in [
+            "current_weight",
+            "target_weight",
+            "effective_weight",
+            "forward_return",
+            "model_impact",
+            "decision_impact",
+            "impact_gap",
+        ]:
+            outcome_df[column] = outcome_df[column].map(lambda value: f"{float(value) * 100:.2f}%")
+        st.dataframe(outcome_df, use_container_width=True, hide_index=True)
 
 
 def show_onboarding_section() -> None:

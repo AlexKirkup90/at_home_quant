@@ -9,6 +9,7 @@ from at_home_quant.advisor.models import WorkflowDecisionInput
 from at_home_quant.advisor.service import (
     generate_weekly_recommendation,
     get_latest_advisor_portfolio,
+    get_weekly_outcome_report,
     get_latest_weekly_report,
     log_decision,
     save_advisor_portfolio_snapshot,
@@ -299,3 +300,43 @@ def test_weekly_recommendation_is_deterministic_for_same_snapshot():
         assert report_a.best_universe == report_b.best_universe
         assert round(report_a.best_universe_score, 8) == round(report_b.best_universe_score, 8)
         assert items_a == items_b
+
+
+def test_weekly_outcome_report_computes_decision_alpha():
+    engine = create_engine("sqlite:///:memory:")
+    as_of = datetime.date(2025, 2, 20)
+    future_end = datetime.date(2025, 2, 28)
+    with Session(engine) as session:
+        _seed_prices(session, future_end)
+        snapshot_hash = "d" * 64
+        _seed_feature_snapshot(session, as_of, snapshot_hash)
+        experiment_id = _seed_experiment(session, as_of, snapshot_hash)
+        positions = [
+            TargetPosition("AAPL", 0.40, "equity"),
+            TargetPosition("MSFT", 0.35, "equity"),
+            TargetPosition("GLD", 0.10, "gold"),
+            TargetPosition("BIL", 0.15, "cash"),
+        ]
+        save_advisor_portfolio_snapshot(as_of_date=as_of, positions=positions, snapshot_type="baseline", session=session)
+        save_advisor_portfolio_snapshot(as_of_date=as_of, positions=positions, snapshot_type="executed", session=session)
+
+        report = generate_weekly_recommendation(
+            as_of_date=as_of,
+            top_n=2,
+            data_snapshot_hash=snapshot_hash,
+            experiment_id=experiment_id,
+            session=session,
+        )
+        for item in report.recommendations[:2]:
+            log_decision(
+                WorkflowDecisionInput(
+                    item_id=item.id,
+                    decision="follow",
+                ),
+                session=session,
+            )
+        outcome = get_weekly_outcome_report(batch_id=report.batch_id, horizon_days=7, session=session)
+        assert outcome is not None
+        assert outcome.evaluation_date >= as_of
+        assert outcome.items
+        assert isinstance(outcome.decision_alpha, float)

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from at_home_quant.config.settings import get_settings
 from at_home_quant.data.tickers import UNIVERSE_BENCHMARK_SYMBOL, Universe
-from at_home_quant.db.models import PortfolioSnapshot, PriceDaily, Ticker
+from at_home_quant.db.models import AdvisorPortfolioSnapshot, PortfolioSnapshot, PriceDaily, Ticker
 from at_home_quant.db.session import get_session
 from at_home_quant.performance.models import MonthlyPerformance
 from at_home_quant.portfolio.models import TargetPortfolio, TargetPosition
@@ -97,6 +97,17 @@ def _snapshot_to_portfolio(snapshot: PortfolioSnapshot) -> TargetPortfolio:
     )
 
 
+def _advisor_snapshot_to_portfolio(snapshot: AdvisorPortfolioSnapshot) -> TargetPortfolio:
+    positions = _deserialize_positions(json.loads(snapshot.positions_json))
+    return TargetPortfolio(
+        as_of_date=snapshot.as_of_date,
+        positions=positions,
+        universe_name=snapshot.universe_name,
+        equity_exposure=snapshot.equity_exposure,
+        defensive_exposure=snapshot.defensive_exposure,
+    )
+
+
 def compute_portfolio_turnover(
     previous_portfolio: TargetPortfolio,
     next_portfolio: TargetPortfolio,
@@ -121,33 +132,55 @@ def compute_monthly_performance_series(
     resolved_slippage_bps = settings.slippage_bps if slippage_bps is None else slippage_bps
 
     def _compute(session_obj: Session) -> List[MonthlyPerformance]:
-        snapshots: Iterable[PortfolioSnapshot] = session_obj.execute(
-            select(PortfolioSnapshot).order_by(PortfolioSnapshot.as_of_date)
+        advisor_rows: Iterable[AdvisorPortfolioSnapshot] = session_obj.execute(
+            select(AdvisorPortfolioSnapshot)
+            .where(AdvisorPortfolioSnapshot.snapshot_type == "executed")
+            .order_by(AdvisorPortfolioSnapshot.as_of_date, AdvisorPortfolioSnapshot.created_at)
         ).scalars()
-        snapshots_list = list(snapshots)
+        latest_by_date: dict[datetime.date, AdvisorPortfolioSnapshot] = {}
+        for row in advisor_rows:
+            latest_by_date[row.as_of_date] = row
+
+        snapshots_list: list[TargetPortfolio]
+        if len(latest_by_date) >= 2:
+            snapshots_list = [
+                _advisor_snapshot_to_portfolio(latest_by_date[as_of_date])
+                for as_of_date in sorted(latest_by_date)
+            ]
+        else:
+            snapshots: Iterable[PortfolioSnapshot] = session_obj.execute(
+                select(PortfolioSnapshot).order_by(PortfolioSnapshot.as_of_date)
+            ).scalars()
+            snapshots_list = [_snapshot_to_portfolio(row) for row in snapshots]
+
         performances: List[MonthlyPerformance] = []
-        for prev, curr in zip(snapshots_list, snapshots_list[1:]):
-            start_portfolio = _snapshot_to_portfolio(prev)
-            end_portfolio = _snapshot_to_portfolio(curr)
+        for start_portfolio, end_portfolio in zip(snapshots_list, snapshots_list[1:]):
             gross_portfolio_return = compute_portfolio_return_for_period(
-                prev.as_of_date, curr.as_of_date, start_portfolio, session_obj
+                start_portfolio.as_of_date,
+                end_portfolio.as_of_date,
+                start_portfolio,
+                session_obj,
             )
             turnover = compute_portfolio_turnover(start_portfolio, end_portfolio)
             total_cost_bps = resolved_transaction_cost_bps + resolved_slippage_bps
             transaction_cost = turnover * (total_cost_bps / 10_000)
             net_portfolio_return = gross_portfolio_return - transaction_cost
             benchmark_name, benchmark_return = compute_benchmark_return_for_period(
-                prev.as_of_date,
-                curr.as_of_date,
+                start_portfolio.as_of_date,
+                end_portfolio.as_of_date,
                 session_obj,
                 regime_getter=regime_getter,
                 benchmark_timing=resolved_benchmark_timing,
             )
-            benchmark_selection_date = prev.as_of_date if resolved_benchmark_timing == "period_start" else curr.as_of_date
+            benchmark_selection_date = (
+                start_portfolio.as_of_date
+                if resolved_benchmark_timing == "period_start"
+                else end_portfolio.as_of_date
+            )
             performances.append(
                 MonthlyPerformance(
-                    period_start=prev.as_of_date,
-                    period_end=curr.as_of_date,
+                    period_start=start_portfolio.as_of_date,
+                    period_end=end_portfolio.as_of_date,
                     portfolio_return=net_portfolio_return,
                     benchmark_name=benchmark_name,
                     benchmark_return=benchmark_return,

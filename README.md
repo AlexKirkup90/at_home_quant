@@ -214,6 +214,15 @@ This pipeline performs:
 2. Versioned dataset snapshots for `raw`, `clean`, and `feature` layers (`dataset_snapshots` + `data_layer_prices`).
 3. Data quality gating (missingness, staleness, return outliers, adjustment-ratio sanity).
 4. Weekly recommendation generation linked to immutable `data_snapshot_hash`.
+5. Best-effort fundamentals refresh into `fundamental_snapshots` for point-in-time factor joins.
+
+The Weekly Advisor now follows a 5-step process:
+
+1. Run Backend
+2. Confirm Current Holdings
+3. Decide (`follow|ignore|partial`)
+4. Save Executed Portfolio
+5. Review Outcomes (including forward decision attribution vs model recommendation impacts)
 
 ## Research & Governance (Phase 2)
 
@@ -236,3 +245,7 @@ python -m at_home_quant.scripts.run_walk_forward --end 2025-12-31 --train-months
 ```
 
 This produces a registered model report with challenger comparisons (SPY/QQQ/BIL) and robustness checks (regime stability + turnover-adjusted alpha persistence).
+
+## CI
+
+GitHub Actions CI runs `pytest` on pushes and pull requests (including leakage-boundary tests in research service/registry).

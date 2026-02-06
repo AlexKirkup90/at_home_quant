@@ -46,6 +46,34 @@ class WeeklyAdvisorReport:
 
 
 @dataclass
+class WeeklyOutcomeItem:
+    ticker: str
+    recommendation: RecommendationAction
+    decision: DecisionAction | None
+    current_weight: float
+    target_weight: float
+    effective_weight: float
+    forward_return: float
+    model_impact: float
+    decision_impact: float
+    impact_gap: float
+
+
+@dataclass
+class WeeklyOutcomeReport:
+    batch_id: int
+    as_of_date: date
+    evaluation_date: date
+    horizon_days: int
+    items: list[WeeklyOutcomeItem]
+    model_active_return: float
+    decision_active_return: float
+    decision_alpha: float
+    follow_hit_rate: float | None
+    ignored_positive_count: int
+
+
+@dataclass
 class WorkflowDecisionInput:
     item_id: int
     decision: DecisionAction
@@ -66,6 +94,8 @@ __all__ = [
     "AdvisorRecommendationItem",
     "AdvisorWatchItem",
     "WeeklyAdvisorReport",
+    "WeeklyOutcomeItem",
+    "WeeklyOutcomeReport",
     "WorkflowDecisionInput",
     "ExecutedPortfolioFromDecisions",
 ]

@@ -13,6 +13,8 @@ from at_home_quant.advisor.models import (
     AdvisorWatchItem,
     ExecutedPortfolioFromDecisions,
     WeeklyAdvisorReport,
+    WeeklyOutcomeItem,
+    WeeklyOutcomeReport,
     WorkflowDecisionInput,
 )
 from at_home_quant.config.settings import get_settings
@@ -26,6 +28,8 @@ from at_home_quant.db.models import (
     WeeklyRecommendationExperimentLink,
     WeeklyRecommendationBatch,
     WeeklyRecommendationItem,
+    PriceDaily,
+    Ticker,
 )
 from at_home_quant.db.session import get_session
 from at_home_quant.portfolio.models import TargetPortfolio, TargetPosition
@@ -627,6 +631,127 @@ def _asset_type_for_ticker(current: TargetPortfolio, target: TargetPortfolio, ti
     return "equity"
 
 
+def _latest_price_on_or_before(
+    session: Session,
+    symbol: str,
+    as_of_date: datetime.date,
+) -> tuple[datetime.date, float] | None:
+    row = session.execute(
+        select(PriceDaily.date, PriceDaily.adj_close)
+        .join(Ticker, Ticker.id == PriceDaily.ticker_id)
+        .where(
+            Ticker.symbol == symbol,
+            PriceDaily.date <= as_of_date,
+            PriceDaily.adj_close.is_not(None),
+        )
+        .order_by(PriceDaily.date.desc())
+    ).first()
+    if row is None:
+        return None
+    price_date, adj_close = row
+    return price_date, float(adj_close)
+
+
+def get_weekly_outcome_report(
+    batch_id: int,
+    horizon_days: int = 5,
+    session: Session | None = None,
+) -> WeeklyOutcomeReport | None:
+    def _get(session_obj: Session) -> WeeklyOutcomeReport | None:
+        Base.metadata.create_all(bind=session_obj.bind)
+        batch = session_obj.execute(
+            select(WeeklyRecommendationBatch).where(WeeklyRecommendationBatch.id == batch_id)
+        ).scalars().first()
+        if batch is None:
+            raise ValueError(f"Recommendation batch {batch_id} was not found.")
+        report = _load_batch_report(batch, session_obj)
+        if not report.recommendations:
+            return None
+
+        desired_eval_date = batch.as_of_date + datetime.timedelta(days=max(1, horizon_days))
+        items: list[WeeklyOutcomeItem] = []
+        model_active_return = 0.0
+        decision_active_return = 0.0
+        follow_hits = 0
+        follow_total = 0
+        ignored_positive = 0
+        resolved_eval_dates: list[datetime.date] = []
+
+        for item in report.recommendations:
+            start_price = _latest_price_on_or_before(session_obj, item.ticker, batch.as_of_date)
+            end_price = _latest_price_on_or_before(session_obj, item.ticker, desired_eval_date)
+            if start_price is None or end_price is None:
+                continue
+            start_date, start_value = start_price
+            end_date, end_value = end_price
+            if start_value == 0:
+                continue
+            resolved_eval_dates.append(end_date)
+            forward_return = (end_value / start_value) - 1.0
+
+            model_delta = item.target_weight - item.current_weight
+            decision = item.decision or "ignore"
+            if decision == "follow":
+                effective_weight = item.target_weight
+            elif decision == "partial":
+                midpoint = (item.current_weight + item.target_weight) / 2.0
+                effective_weight = midpoint if item.executed_weight is None else item.executed_weight
+            else:
+                effective_weight = item.current_weight
+            decision_delta = effective_weight - item.current_weight
+
+            model_impact = model_delta * forward_return
+            decision_impact = decision_delta * forward_return
+            impact_gap = decision_impact - model_impact
+            model_active_return += model_impact
+            decision_active_return += decision_impact
+
+            if decision == "follow":
+                follow_total += 1
+                if model_impact >= 0:
+                    follow_hits += 1
+            if decision in {"ignore", ""} and model_impact > 0:
+                ignored_positive += 1
+
+            items.append(
+                WeeklyOutcomeItem(
+                    ticker=item.ticker,
+                    recommendation=item.recommendation,
+                    decision=item.decision,
+                    current_weight=item.current_weight,
+                    target_weight=item.target_weight,
+                    effective_weight=effective_weight,
+                    forward_return=forward_return,
+                    model_impact=model_impact,
+                    decision_impact=decision_impact,
+                    impact_gap=impact_gap,
+                )
+            )
+
+        if not items:
+            return None
+
+        evaluation_date = max(resolved_eval_dates) if resolved_eval_dates else desired_eval_date
+        return WeeklyOutcomeReport(
+            batch_id=batch.id,
+            as_of_date=batch.as_of_date,
+            evaluation_date=evaluation_date,
+            horizon_days=horizon_days,
+            items=items,
+            model_active_return=model_active_return,
+            decision_active_return=decision_active_return,
+            decision_alpha=(decision_active_return - model_active_return),
+            follow_hit_rate=(None if follow_total == 0 else (follow_hits / follow_total)),
+            ignored_positive_count=ignored_positive,
+        )
+
+    if session is not None:
+        return _get(session)
+
+    with get_session() as session_obj:
+        return _get(session_obj)
+
+
 def save_executed_from_decisions(
     batch_id: int,
     session: Session | None = None,
@@ -702,4 +827,5 @@ __all__ = [
     "get_latest_weekly_report",
     "log_decision",
     "save_executed_from_decisions",
+    "get_weekly_outcome_report",
 ]
