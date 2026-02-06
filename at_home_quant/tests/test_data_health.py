@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from at_home_quant.data.health import get_data_health_report
 from at_home_quant.data.tickers import BENCHMARKS
-from at_home_quant.db.models import Base, PriceDaily, Ticker
+from at_home_quant.db.models import AdvisorPortfolioSnapshot, Base, PriceDaily, Ticker
 
 REQUIRED_SYMBOLS = ["QQQ", "SPY", "VMID", "GLD", "BIL"]
 
@@ -65,3 +65,31 @@ def test_data_health_report_flags_missing_required_symbol():
 
     assert not report.is_healthy
     assert any(issue.code == "missing_symbol_history" and "VMID" in issue.message for issue in report.issues)
+
+
+def test_data_health_report_includes_live_holdings_from_advisor_snapshots():
+    as_of = datetime.date(2025, 1, 31)
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(bind=engine)
+
+    with Session(engine) as session:
+        for symbol in REQUIRED_SYMBOLS:
+            _seed_symbol_history(session, symbol, as_of, periods=260)
+        session.add(
+            AdvisorPortfolioSnapshot(
+                as_of_date=as_of,
+                snapshot_type="executed",
+                source="test",
+                universe_name="USER_BASELINE",
+                equity_exposure=1.0,
+                defensive_exposure=0.0,
+                positions_json='[{"ticker":"CUSTOMX","weight":1.0,"asset_type":"equity"}]',
+            )
+        )
+        session.commit()
+
+        report = get_data_health_report(as_of_date=as_of, session=session)
+
+    assert "CUSTOMX" in report.required_symbols
+    assert not report.is_healthy
+    assert any(issue.code == "missing_symbol_history" and "CUSTOMX" in issue.message for issue in report.issues)

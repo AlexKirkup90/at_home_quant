@@ -93,6 +93,16 @@ SYMBOL_EQUIVALENCE_GROUPS: Dict[str, set[str]] = {
     "BIL": {"BIL", "VAGS", "SGOV", "SHY", "AGG", "BND"},
 }
 
+# Internal symbols can differ from vendor symbols; this mapping preserves
+# user-facing/internal tickers while trying vendor-specific aliases for fetches.
+VENDOR_SYMBOL_ALIASES: Dict[str, tuple[str, ...]] = {
+    "JGGI": ("JGGI.L", "JGGI"),
+    "VAGS": ("VAGS.L", "VAGP.L", "VAGS"),
+    "VHYL": ("VHYL.L", "VHYL.AS", "VHYL"),
+    "VUSA": ("VUSA.L", "VUSA.AS", "VUSA"),
+    "VMID": ("VMID.L", "VMID"),
+}
+
 
 def sector_for_symbol(symbol: str) -> str:
     return SECTOR_BY_SYMBOL.get(symbol, f"UNKNOWN:{symbol}")
@@ -118,6 +128,19 @@ def equivalent_symbols(symbol: str) -> set[str]:
     return SYMBOL_EQUIVALENCE_GROUPS.get(canonical, {canonical})
 
 
+def vendor_symbol_candidates(symbol: str) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for candidate in VENDOR_SYMBOL_ALIASES.get(symbol, (symbol,)):
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        ordered.append(candidate)
+    if symbol not in seen:
+        ordered.append(symbol)
+    return ordered
+
+
 def list_all_symbols() -> list[str]:
     return list(ALL_TICKERS.keys())
 
@@ -139,10 +162,12 @@ __all__ = [
     "SECTOR_BY_SYMBOL",
     "REGION_BY_SYMBOL",
     "SYMBOL_EQUIVALENCE_GROUPS",
+    "VENDOR_SYMBOL_ALIASES",
     "sector_for_symbol",
     "region_for_symbol",
     "canonical_symbol",
     "equivalent_symbols",
+    "vendor_symbol_candidates",
     "list_all_symbols",
     "iter_universe",
 ]

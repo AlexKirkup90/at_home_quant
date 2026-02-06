@@ -8,7 +8,7 @@ import pandas as pd
 import yfinance as yf
 
 from at_home_quant.config.settings import get_settings
-from at_home_quant.data.tickers import TickerInfo
+from at_home_quant.data.tickers import TickerInfo, vendor_symbol_candidates
 
 REQUIRED_COLUMNS = ["symbol", "date", "open", "high", "low", "close", "adj_close", "volume"]
 
@@ -89,20 +89,32 @@ def _synthetic_prices(symbol: str, start: datetime.date | None, end: datetime.da
 def fetch_price_history(symbol: str | TickerInfo, start: datetime.date | None = None, end: datetime.date | None = None) -> pd.DataFrame:
     symbol_str = symbol.symbol if isinstance(symbol, TickerInfo) else symbol
     settings = get_settings()
-    try:
-        data = yf.download(symbol_str, start=start, end=end, progress=False)
-    except Exception as exc:  # noqa: BLE001
-        if settings.allow_synthetic_data:
-            return _synthetic_prices(symbol_str, start, end)
-        raise RuntimeError(f"Price fetch failed for {symbol_str}: {exc}") from exc
-    if data.empty:
-        if settings.allow_synthetic_data:
-            return _synthetic_prices(symbol_str, start, end)
+    last_error: Exception | None = None
+    for vendor_symbol in vendor_symbol_candidates(symbol_str):
+        try:
+            data = yf.download(vendor_symbol, start=start, end=end, progress=False)
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            continue
+        if data.empty:
+            continue
+        try:
+            normalized = _normalize_df(data, symbol_str)
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            continue
+        return normalized
+
+    if settings.allow_synthetic_data:
+        return _synthetic_prices(symbol_str, start, end)
+    if last_error is not None:
         raise RuntimeError(
-            f"No market data returned for {symbol_str} between {start} and {end} in production mode."
-        )
-    normalized = _normalize_df(data, symbol_str)
-    return normalized
+            f"Price fetch failed for {symbol_str} using aliases {vendor_symbol_candidates(symbol_str)}: {last_error}"
+        ) from last_error
+    raise RuntimeError(
+        f"No market data returned for {symbol_str} using aliases {vendor_symbol_candidates(symbol_str)} "
+        f"between {start} and {end} in production mode."
+    )
 
 
 def compute_returns(df: pd.DataFrame) -> pd.DataFrame:

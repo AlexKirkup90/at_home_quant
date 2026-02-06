@@ -81,3 +81,33 @@ def test_fetch_price_history_research_mode_uses_synthetic_on_empty_download(monk
     df = fetcher.fetch_price_history("QQQ", start=datetime.date(2025, 1, 1))
     assert not df.empty
     assert set(fetcher.REQUIRED_COLUMNS).issubset(df.columns)
+
+
+def test_fetch_price_history_uses_vendor_alias_candidates(monkeypatch):
+    monkeypatch.setenv("DATA_MODE", "production")
+    dates = pd.bdate_range("2025-01-01", periods=3)
+    raw = pd.DataFrame(
+        {
+            "Open": [100.0, 101.0, 102.0],
+            "High": [101.0, 102.0, 103.0],
+            "Low": [99.0, 100.0, 101.0],
+            "Close": [100.5, 101.5, 102.5],
+            "Adj Close": [100.5, 101.5, 102.5],
+            "Volume": [1_000_000, 1_000_000, 1_000_000],
+        },
+        index=dates,
+    )
+
+    calls: list[str] = []
+
+    def download_override(symbol, *args, **kwargs):  # noqa: ARG001
+        calls.append(symbol)
+        if symbol == "VUSA.L":
+            return raw
+        return pd.DataFrame()
+
+    monkeypatch.setattr(fetcher.yf, "download", download_override)
+    df = fetcher.fetch_price_history("VUSA", start=datetime.date(2025, 1, 1))
+    assert not df.empty
+    assert set(df["symbol"]) == {"VUSA"}
+    assert calls == ["VUSA.L"]

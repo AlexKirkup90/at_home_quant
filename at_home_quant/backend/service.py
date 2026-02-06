@@ -13,6 +13,7 @@ from at_home_quant.advisor.service import generate_weekly_recommendation
 from at_home_quant.backend.models import BackendPipelineResult
 from at_home_quant.config.settings import get_settings
 from at_home_quant.data.fetcher import compute_returns
+from at_home_quant.data.health import get_data_health_report, get_portfolio_required_symbols
 from at_home_quant.data.quality import evaluate_price_quality
 from at_home_quant.db.models import BackendRun, DataLayerPrice, DatasetSnapshot, PriceDaily, Ticker
 from at_home_quant.db.session import get_session, init_db
@@ -186,6 +187,19 @@ def run_backend_pipeline(
                 )
                 if not quality.is_passing:
                     raise ValueError(f"Data quality gate failed: {quality.summary()}")
+                required_symbols = get_portfolio_required_symbols(
+                    as_of_date=resolved_as_of,
+                    session=session,
+                )
+                health = get_data_health_report(
+                    as_of_date=resolved_as_of,
+                    required_symbols=required_symbols,
+                    session=session,
+                )
+                if not health.is_healthy:
+                    raise ValueError(
+                        "Data health gate failed: " + "; ".join(health.issue_messages())
+                    )
 
                 _persist_layer_snapshot(session, "raw", resolved_as_of, raw_df, run_id=run_id)
                 _persist_layer_snapshot(session, "clean", resolved_as_of, clean_df, run_id=run_id)
@@ -240,14 +254,22 @@ def run_backend_pipeline(
                 run.status = "succeeded"
                 run.finished_at = datetime.datetime.utcnow()
                 run.data_snapshot_hash = feature_snapshot.snapshot_hash
-                run.message = quality.summary()
+                run.message = (
+                    quality.summary()
+                    + " | required_symbols="
+                    + ",".join(required_symbols)
+                )
 
                 return BackendPipelineResult(
                     run_id=run_id,
                     status=run.status,
                     as_of_date=resolved_as_of,
                     data_snapshot_hash=feature_snapshot.snapshot_hash,
-                    quality_summary=quality.summary(),
+                    quality_summary=(
+                        quality.summary()
+                        + " | required_symbols="
+                        + ",".join(required_symbols)
+                    ),
                     recommendation_batch_id=recommendation_batch_id,
                     experiment_id=experiment_id,
                 )

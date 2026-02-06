@@ -8,7 +8,7 @@ import pandas as pd
 from sqlalchemy import select
 
 from at_home_quant.config.settings import get_settings
-from at_home_quant.data.health import PORTFOLIO_REQUIRED_SYMBOLS
+from at_home_quant.data.health import get_portfolio_required_symbols
 from at_home_quant.data.fetcher import compute_returns, fetch_prices_for_universe
 from at_home_quant.data.tickers import ALL_TICKERS, list_all_symbols
 from at_home_quant.db import crud
@@ -37,6 +37,7 @@ def _load_symbol_universe(session) -> list[str]:
 
 def run_daily_update() -> None:
     settings = get_settings()
+    today = datetime.date.today()
     init_db()
     with get_session() as session:
         crud.upsert_tickers(session, ALL_TICKERS)
@@ -44,8 +45,7 @@ def run_daily_update() -> None:
     with get_session() as session:
         latest_dates = _get_latest_dates(session)
         symbols = _load_symbol_universe(session)
-
-    today = datetime.date.today()
+        required_symbols = set(get_portfolio_required_symbols(as_of_date=today, session=session))
     fetch_start_by_symbol: dict[str, datetime.date] = {}
     for symbol in symbols:
         last_date = latest_dates.get(symbol)
@@ -58,7 +58,6 @@ def run_daily_update() -> None:
             fetch_start_by_symbol[symbol] = settings.default_start_date
 
     frames = []
-    required_symbols = set(PORTFOLIO_REQUIRED_SYMBOLS)
     for symbol in symbols:
         start_date = fetch_start_by_symbol[symbol]
         # Skip same-day fetches; intraday/partial vendor responses are often empty.

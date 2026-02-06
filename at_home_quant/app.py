@@ -254,7 +254,7 @@ def show_data_health_panel(as_of_date: datetime.date | None = None) -> None:
         issues_df = pd.DataFrame(
             [{"code": issue.code, "message": issue.message} for issue in report.issues]
         )
-        st.dataframe(issues_df, use_container_width=True, hide_index=True)
+        st.dataframe(issues_df, width="stretch", hide_index=True)
 
 
 # ---------- UI Sections ----------
@@ -401,7 +401,7 @@ def show_weekly_advisor_section() -> None:
             checks_df["total_cost_bps"] = checks_df["total_cost_bps"].map(
                 lambda value: "" if pd.isna(value) else f"{float(value):.2f}"
             )
-        st.dataframe(checks_df, use_container_width=True, hide_index=True)
+        st.dataframe(checks_df, width="stretch", hide_index=True)
 
     decided_count = sum(1 for item in report.recommendations if item.decision is not None)
     st.caption(f"Decision coverage: {decided_count}/{len(report.recommendations)}")
@@ -425,7 +425,7 @@ def show_weekly_advisor_section() -> None:
             recommendation_df[column] = recommendation_df[column].map(
                 lambda value: "" if pd.isna(value) else f"{float(value) * 100:.2f}%"
             )
-    st.dataframe(recommendation_df, use_container_width=True, hide_index=True)
+    st.dataframe(recommendation_df, width="stretch", hide_index=True)
 
     with st.expander("Log Decisions"):
         for item in report.recommendations:
@@ -530,14 +530,14 @@ def show_weekly_advisor_section() -> None:
     else:
         for column in ["current_weight", "target_weight", "effective_weight", "gap_vs_target"]:
             review_df[column] = review_df[column].map(lambda value: f"{float(value) * 100:.2f}%")
-        st.dataframe(review_df, use_container_width=True, hide_index=True)
+        st.dataframe(review_df, width="stretch", hide_index=True)
 
     st.markdown("**Watchlist (near-buys)**")
     if not report.watchlist:
         st.caption("No watchlist candidates for this cycle.")
     else:
         watch_df = pd.DataFrame([asdict(item) for item in report.watchlist])
-        st.dataframe(watch_df, use_container_width=True, hide_index=True)
+        st.dataframe(watch_df, width="stretch", hide_index=True)
 
     st.markdown("**Decision Outcome Attribution**")
     outcome_horizon_days = st.slider(
@@ -588,7 +588,7 @@ def show_weekly_advisor_section() -> None:
             "impact_gap",
         ]:
             outcome_df[column] = outcome_df[column].map(lambda value: f"{float(value) * 100:.2f}%")
-        st.dataframe(outcome_df, use_container_width=True, hide_index=True)
+        st.dataframe(outcome_df, width="stretch", hide_index=True)
 
 
 def show_onboarding_section() -> None:
@@ -702,7 +702,7 @@ def show_regime_section(
     if scores_df.empty:
         st.info("No universe scores available for this date.")
     else:
-        st.dataframe(scores_df, use_container_width=True)
+        st.dataframe(scores_df, width="stretch")
 
 
 def show_portfolio_section(
@@ -763,7 +763,7 @@ def show_portfolio_section(
 
     st.subheader("Target portfolio preview")
     portfolio_df = portfolio_to_dataframe(target_portfolio)
-    st.dataframe(portfolio_df, use_container_width=True)
+    st.dataframe(portfolio_df, width="stretch")
     risk_report = target_portfolio.risk_report
     if risk_report is not None:
         st.subheader("Risk overlay")
@@ -779,7 +779,7 @@ def show_portfolio_section(
             st.warning("Risk overlay checks have violations.")
             violations_df = risk_report_to_dataframe(risk_report)
             if not violations_df.empty:
-                st.dataframe(violations_df, use_container_width=True, hide_index=True)
+                st.dataframe(violations_df, width="stretch", hide_index=True)
 
     if not read_only and st.button("Save Target Snapshot"):
         with st.spinner("Saving target snapshot..."):
@@ -793,7 +793,7 @@ def show_portfolio_section(
     try:
         instructions = compute_rebalance(selected_date, threshold=threshold, top_n=top_n)
         rebalance_df = rebalance_to_dataframe(instructions)
-        st.dataframe(rebalance_df, use_container_width=True)
+        st.dataframe(rebalance_df, width="stretch")
     except ValueError as exc:
         st.info(
             "No rebalance instructions available yet. "
@@ -855,7 +855,7 @@ def show_ranking_section(
 
     data = [asdict(r) for r in ranked]
     ranking_df = pd.DataFrame(data)
-    st.dataframe(ranking_df, use_container_width=True)
+    st.dataframe(ranking_df, width="stretch")
 
 
 def show_performance_section(read_only: bool = False) -> None:
@@ -940,11 +940,11 @@ def show_performance_section(read_only: bool = False) -> None:
     )
 
     st.subheader("Monthly performance")
-    st.dataframe(monthly_df, use_container_width=True)
+    st.dataframe(monthly_df, width="stretch")
 
     st.subheader("Summary stats")
     summary_df = summary_to_dataframe(summary)
-    st.dataframe(summary_df, use_container_width=True)
+    st.dataframe(summary_df, width="stretch")
 
     if not monthly_df.empty:
         st.subheader("Equity curve vs benchmark")
@@ -1001,7 +1001,7 @@ def show_model_governance_section(as_of_date: datetime.date | None = None) -> No
             }
         )
     table_df = pd.DataFrame(table)
-    st.dataframe(table_df, use_container_width=True, hide_index=True)
+    st.dataframe(table_df, width="stretch", hide_index=True)
 
     experiment_ids = [row.id for row in rows]
     selected_experiment_id = st.selectbox(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import json
 from dataclasses import dataclass, field
 from typing import Iterable
 
@@ -9,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from at_home_quant.config.settings import get_settings
 from at_home_quant.data.tickers import UNIVERSE_BENCHMARK_SYMBOL
-from at_home_quant.db.models import PriceDaily, Ticker
+from at_home_quant.db.models import AdvisorPortfolioSnapshot, PriceDaily, Ticker
 from at_home_quant.db.session import get_session
 
 REGIME_BENCHMARK_SYMBOLS = tuple(sorted(set(UNIVERSE_BENCHMARK_SYMBOL.values())))
@@ -60,6 +61,53 @@ def _collect_symbol_stats(
         .group_by(Ticker.symbol)
     ).all()
     return {symbol: (int(count), latest_date) for symbol, count, latest_date in rows}
+
+
+def _load_live_holdings_symbols(
+    session: Session,
+    as_of_date: datetime.date | None,
+) -> tuple[str, ...]:
+    effective_as_of = as_of_date or datetime.date.today()
+    symbols: set[str] = set()
+    for snapshot_type in ("executed", "baseline"):
+        row = session.execute(
+            select(AdvisorPortfolioSnapshot.positions_json)
+            .where(
+                AdvisorPortfolioSnapshot.snapshot_type == snapshot_type,
+                AdvisorPortfolioSnapshot.as_of_date <= effective_as_of,
+            )
+            .order_by(
+                AdvisorPortfolioSnapshot.as_of_date.desc(),
+                AdvisorPortfolioSnapshot.created_at.desc(),
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            continue
+        try:
+            parsed = json.loads(row)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if not isinstance(parsed, list):
+            continue
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            ticker = item.get("ticker")
+            if isinstance(ticker, str) and ticker.strip():
+                symbols.add(ticker.strip().upper())
+    return tuple(sorted(symbols))
+
+
+def get_portfolio_required_symbols(
+    as_of_date: datetime.date | None = None,
+    session: Session | None = None,
+) -> tuple[str, ...]:
+    if session is not None:
+        live_symbols = _load_live_holdings_symbols(session, as_of_date=as_of_date)
+        return tuple(sorted(set(PORTFOLIO_REQUIRED_SYMBOLS) | set(live_symbols)))
+    with get_session() as session_obj:
+        live_symbols = _load_live_holdings_symbols(session_obj, as_of_date=as_of_date)
+    return tuple(sorted(set(PORTFOLIO_REQUIRED_SYMBOLS) | set(live_symbols)))
 
 
 def _build_report(
@@ -142,9 +190,12 @@ def get_data_health_report(
     required_symbols: Iterable[str] | None = None,
     session: Session | None = None,
 ) -> DataHealthReport:
-    symbols = tuple(sorted(set(required_symbols or PORTFOLIO_REQUIRED_SYMBOLS)))
     if session is not None:
+        base_required = get_portfolio_required_symbols(as_of_date=as_of_date, session=session)
+        symbols = tuple(sorted(set(required_symbols or base_required)))
         return _build_report(session, as_of_date=as_of_date, required_symbols=symbols)
+    base_required = get_portfolio_required_symbols(as_of_date=as_of_date, session=None)
+    symbols = tuple(sorted(set(required_symbols or base_required)))
     with get_session() as session_obj:
         return _build_report(session_obj, as_of_date=as_of_date, required_symbols=symbols)
 
@@ -168,6 +219,7 @@ __all__ = [
     "DataHealthReport",
     "REGIME_BENCHMARK_SYMBOLS",
     "PORTFOLIO_REQUIRED_SYMBOLS",
+    "get_portfolio_required_symbols",
     "get_data_health_report",
     "assert_data_health_for_portfolio",
 ]
