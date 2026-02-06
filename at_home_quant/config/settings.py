@@ -77,6 +77,10 @@ class Settings(BaseSettings):
         True,
         description="If true, suppresses low-signal trades using min-size and cost-aware gates.",
     )
+    show_debug_admin: bool = Field(
+        False,
+        description="If true, exposes Advanced tab write/debug controls.",
+    )
     benchmark_tickers: List[str] = Field(
         default_factory=lambda: ["QQQ", "SPY", "VMID", "GLD", "IAU", "BIL"],
         description="Default benchmark/asset tickers to fetch",

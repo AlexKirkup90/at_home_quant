@@ -9,6 +9,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import datetime
+import json
 import logging
 import re
 from dataclasses import asdict
@@ -39,7 +40,7 @@ from at_home_quant.advisor.service import (
 from at_home_quant.research.service import run_walk_forward_experiment
 from at_home_quant.data.tickers import Universe
 from at_home_quant.data.health import get_data_health_report
-from at_home_quant.db.models import PortfolioSnapshot, PriceDaily
+from at_home_quant.db.models import ExperimentRun, PortfolioSnapshot, PriceDaily
 from at_home_quant.db.session import get_session, init_db
 from at_home_quant.performance.models import MonthlyPerformance, PerformanceSummary
 from at_home_quant.performance.stats import compute_performance_summary
@@ -116,6 +117,16 @@ def risk_report_to_dataframe(report: PortfolioRiskReport | None) -> pd.DataFrame
     if not rows:
         return pd.DataFrame(columns=["code", "message", "current_value", "limit_value"])
     return pd.DataFrame(rows)
+
+
+def _safe_json_obj(raw: str | None) -> dict:
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def _format_pct(value: float | None) -> str:
@@ -220,18 +231,18 @@ def _mode_badge_html(mode: str, gate_enabled: bool) -> str:
     )
 
 
-def show_data_health_panel() -> None:
+def show_data_health_panel(as_of_date: datetime.date | None = None) -> None:
     require_streamlit()
     settings = get_settings()
     latest_date = get_latest_price_date()
-    as_of_date = latest_date or datetime.date.today()
-    report = get_data_health_report(as_of_date=as_of_date)
+    effective_as_of = as_of_date or latest_date or datetime.date.today()
+    report = get_data_health_report(as_of_date=effective_as_of)
 
     st.subheader("Data Health")
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Mode", settings.data_mode.upper())
     col2.metric("Health Gate", "ON" if settings.enforce_data_health_gate else "OFF")
-    col3.metric("As-of Date", as_of_date.isoformat())
+    col3.metric("As-of Date", effective_as_of.isoformat())
     col4.metric("Latest Price Date", latest_date.isoformat() if latest_date else "N/A")
     st.caption("Required symbols: " + ", ".join(report.required_symbols))
 
@@ -517,7 +528,10 @@ def show_onboarding_section() -> None:
             st.error(f"Unable to save anchor portfolio: {exc}")
 
 
-def show_regime_section() -> None:
+def show_regime_section(
+    as_of_date: datetime.date | None = None,
+    read_only: bool = False,
+) -> None:
     require_streamlit()
     st.header("Regime & Universe Overview")
 
@@ -529,7 +543,16 @@ def show_regime_section() -> None:
         )
         return
 
-    selected_date = st.date_input("As-of date", value=latest_date, max_value=latest_date)
+    if read_only:
+        selected_date = min(as_of_date or latest_date, latest_date)
+        st.caption(f"As-of date: {selected_date.isoformat()}")
+    else:
+        selected_date = st.date_input(
+            "As-of date",
+            value=latest_date,
+            max_value=latest_date,
+            key="regime_as_of_date",
+        )
 
     try:
         regime: RegimeDecision = get_current_regime(selected_date)
@@ -562,7 +585,10 @@ def show_regime_section() -> None:
         st.dataframe(scores_df, use_container_width=True)
 
 
-def show_portfolio_section() -> None:
+def show_portfolio_section(
+    as_of_date: datetime.date | None = None,
+    read_only: bool = False,
+) -> None:
     require_streamlit()
     st.header("Current Portfolio & Rebalance")
 
@@ -580,9 +606,22 @@ def show_portfolio_section() -> None:
     else:
         st.info("No portfolio snapshots yet. Build and save an initial target portfolio to bootstrap rebalancing.")
 
-    selected_date = st.date_input("Portfolio as-of date", value=latest_price_date, max_value=latest_price_date)
-    top_n = st.slider("Top N equities", min_value=1, max_value=50, value=15, key="portfolio_top_n")
-    threshold = st.slider("Rebalance threshold (%)", min_value=0.0, max_value=5.0, value=0.5, step=0.1) / 100
+    if read_only:
+        selected_date = min(as_of_date or latest_price_date, latest_price_date)
+        top_n = 15
+        threshold = 0.005
+        st.caption(
+            f"As-of date: {selected_date.isoformat()} | top_n={top_n} | rebalance threshold={threshold:.2%}"
+        )
+    else:
+        selected_date = st.date_input(
+            "Portfolio as-of date",
+            value=latest_price_date,
+            max_value=latest_price_date,
+            key="portfolio_as_of_date",
+        )
+        top_n = st.slider("Top N equities", min_value=1, max_value=50, value=15, key="portfolio_top_n")
+        threshold = st.slider("Rebalance threshold (%)", min_value=0.0, max_value=5.0, value=0.5, step=0.1) / 100
     health_report = get_data_health_report(as_of_date=selected_date)
     if not health_report.is_healthy:
         st.error("Data health gate failed for the selected as-of date.")
@@ -621,7 +660,7 @@ def show_portfolio_section() -> None:
             if not violations_df.empty:
                 st.dataframe(violations_df, use_container_width=True, hide_index=True)
 
-    if st.button("Save Target Snapshot"):
+    if not read_only and st.button("Save Target Snapshot"):
         with st.spinner("Saving target snapshot..."):
             try:
                 build_monthly_portfolio(selected_date, top_n=top_n, persist_snapshot=True)
@@ -645,12 +684,14 @@ def show_portfolio_section() -> None:
         st.caption(str(exc))
 
 
-def show_ranking_section() -> None:
+def show_ranking_section(
+    as_of_date: datetime.date | None = None,
+    read_only: bool = False,
+) -> None:
     require_streamlit()
     st.header("Stock Ranking (Equity Sleeve Detail)")
 
     universes = [u for u in Universe if u != Universe.BENCHMARK]
-    universe_name = st.selectbox("Universe", options=universes, format_func=lambda u: u.value)
     latest_date = get_latest_price_date()
     if latest_date is None:
         st.warning(
@@ -659,8 +700,26 @@ def show_ranking_section() -> None:
         )
         return
 
-    selected_date = st.date_input("Ranking date", value=latest_date, max_value=latest_date, key="ranking_date")
-    top_n = st.slider("Top N", min_value=1, max_value=50, value=15)
+    if read_only:
+        selected_date = min(as_of_date or latest_date, latest_date)
+        try:
+            regime = get_current_regime(selected_date)
+            universe_name = Universe[regime.best_universe]
+        except Exception:  # noqa: BLE001
+            universe_name = Universe.NASDAQ100
+        top_n = 15
+        st.caption(
+            f"As-of date: {selected_date.isoformat()} | universe={universe_name.value} | top_n={top_n}"
+        )
+    else:
+        universe_name = st.selectbox("Universe", options=universes, format_func=lambda u: u.value)
+        selected_date = st.date_input(
+            "Ranking date",
+            value=latest_date,
+            max_value=latest_date,
+            key="ranking_date",
+        )
+        top_n = st.slider("Top N", min_value=1, max_value=50, value=15)
 
     try:
         ranked = rank_universe(universe_name.name, selected_date, top_n=top_n)
@@ -678,33 +737,38 @@ def show_ranking_section() -> None:
     st.dataframe(ranking_df, use_container_width=True)
 
 
-def show_performance_section() -> None:
+def show_performance_section(read_only: bool = False) -> None:
     require_streamlit()
     st.header("Performance & Alpha")
     settings = get_settings()
-    timing_options = ["period_start", "period_end"]
-    default_timing_index = timing_options.index(settings.benchmark_selection_timing)
-    col1, col2, col3 = st.columns(3)
-    benchmark_timing = col1.selectbox(
-        "Benchmark timing",
-        options=timing_options,
-        index=default_timing_index,
-        help="Choose whether benchmark universe selection happens at the start or end of each period.",
-    )
-    transaction_cost_bps = col2.number_input(
-        "Transaction cost (bps)",
-        min_value=0.0,
-        max_value=100.0,
-        value=float(settings.transaction_cost_bps),
-        step=0.5,
-    )
-    slippage_bps = col3.number_input(
-        "Slippage (bps)",
-        min_value=0.0,
-        max_value=100.0,
-        value=float(settings.slippage_bps),
-        step=0.5,
-    )
+    if read_only:
+        benchmark_timing = settings.benchmark_selection_timing
+        transaction_cost_bps = settings.transaction_cost_bps
+        slippage_bps = settings.slippage_bps
+    else:
+        timing_options = ["period_start", "period_end"]
+        default_timing_index = timing_options.index(settings.benchmark_selection_timing)
+        col1, col2, col3 = st.columns(3)
+        benchmark_timing = col1.selectbox(
+            "Benchmark timing",
+            options=timing_options,
+            index=default_timing_index,
+            help="Choose whether benchmark universe selection happens at the start or end of each period.",
+        )
+        transaction_cost_bps = col2.number_input(
+            "Transaction cost (bps)",
+            min_value=0.0,
+            max_value=100.0,
+            value=float(settings.transaction_cost_bps),
+            step=0.5,
+        )
+        slippage_bps = col3.number_input(
+            "Slippage (bps)",
+            min_value=0.0,
+            max_value=100.0,
+            value=float(settings.slippage_bps),
+            step=0.5,
+        )
 
     try:
         monthly = get_monthly_performance(
@@ -783,6 +847,72 @@ def show_performance_section() -> None:
         st.bar_chart(monthly_df.set_index("period_end")["alpha"])
 
 
+def show_model_governance_section(as_of_date: datetime.date | None = None) -> None:
+    require_streamlit()
+    st.header("Model Governance")
+    latest_price_date = get_latest_price_date()
+    effective_as_of = as_of_date or latest_price_date or datetime.date.today()
+
+    with get_session() as session:
+        stmt = select(ExperimentRun).order_by(ExperimentRun.created_at.desc())
+        if effective_as_of is not None:
+            stmt = stmt.where(ExperimentRun.as_of_date <= effective_as_of)
+        rows = session.execute(stmt.limit(50)).scalars().all()
+
+    if not rows:
+        st.info("No experiment reports found yet.")
+        return
+
+    table = []
+    for row in rows:
+        metrics = _safe_json_obj(row.metrics_json)
+        table.append(
+            {
+                "experiment_id": row.id,
+                "created_at": row.created_at.isoformat() if row.created_at else "",
+                "run_type": row.run_type,
+                "status": row.status,
+                "as_of_date": row.as_of_date.isoformat(),
+                "snapshot_hash": row.feature_snapshot_hash,
+                "leakage_checks_passed": bool(row.leakage_checks_passed),
+                "total_return": metrics.get("total_return"),
+                "information_ratio": metrics.get("information_ratio"),
+            }
+        )
+    table_df = pd.DataFrame(table)
+    st.dataframe(table_df, use_container_width=True, hide_index=True)
+
+    experiment_ids = [row.id for row in rows]
+    selected_experiment_id = st.selectbox(
+        "Experiment report details",
+        options=experiment_ids,
+        index=0,
+        key="advanced_experiment_id",
+    )
+    selected = next(row for row in rows if row.id == selected_experiment_id)
+    st.caption(
+        f"run_type={selected.run_type} | status={selected.status} | "
+        f"as_of={selected.as_of_date.isoformat()} | leakage={bool(selected.leakage_checks_passed)}"
+    )
+    if selected.leakage_message:
+        st.caption(f"notes: {selected.leakage_message}")
+    metrics = _safe_json_obj(selected.metrics_json)
+    challenger = _safe_json_obj(selected.challenger_json)
+    robustness = _safe_json_obj(selected.robustness_json)
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total Return", _format_pct(metrics.get("total_return")))
+    ir = metrics.get("information_ratio")
+    col2.metric("Information Ratio", "N/A" if ir is None else f"{float(ir):.2f}")
+    outperformance = challenger.get("outperformance_vs_spy")
+    col3.metric("Outperf vs SPY", _format_pct(outperformance))
+    with st.expander("Metrics JSON"):
+        st.json(metrics)
+    with st.expander("Challenger JSON"):
+        st.json(challenger)
+    with st.expander("Robustness JSON"):
+        st.json(robustness)
+
+
 def show_admin_section() -> None:
     require_streamlit()
     st.header("Setup / Admin (Debug)")
@@ -852,19 +982,32 @@ def main() -> None:
         show_weekly_advisor_section()
 
     with advanced_tab:
-        show_data_health_panel()
+        latest_price_date = get_latest_price_date()
+        if latest_price_date is None:
+            st.warning("No price data found. Run backend once from Weekly Advisor to initialize reports.")
+        advanced_as_of = st.date_input(
+            "Advanced report as-of date",
+            value=latest_price_date or datetime.date.today(),
+            max_value=latest_price_date,
+            key="advanced_as_of_date",
+        )
+        show_data_health_panel(as_of_date=advanced_as_of)
         st.markdown("---")
-        show_onboarding_section()
+        show_regime_section(as_of_date=advanced_as_of, read_only=True)
         st.markdown("---")
-        show_regime_section()
+        show_portfolio_section(as_of_date=advanced_as_of, read_only=True)
         st.markdown("---")
-        show_portfolio_section()
+        show_ranking_section(as_of_date=advanced_as_of, read_only=True)
         st.markdown("---")
-        show_ranking_section()
+        show_performance_section(read_only=True)
         st.markdown("---")
-        show_performance_section()
-        st.markdown("---")
-        show_admin_section()
+        show_model_governance_section(as_of_date=advanced_as_of)
+
+        if settings.show_debug_admin:
+            with st.expander("Developer Tools (Write Actions)"):
+                show_onboarding_section()
+                st.markdown("---")
+                show_admin_section()
 
 
 if __name__ == "__main__":

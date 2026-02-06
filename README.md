@@ -45,6 +45,7 @@ Data mode and health-gate controls:
 - `MIN_TRADE_DELTA_PCT=5.0` (minimum absolute trade size before emitting buy/sell recommendations).
 - `WEIGHT_ROUNDING_PCT=1.0` (round target weights to practical increments).
 - `ENABLE_TRADE_GATING=true` (cost-aware gate to suppress low-signal over-trading).
+- `SHOW_DEBUG_ADMIN=false` (keep Advanced tab read-only; set true to expose debug write controls).
 
 3. **Run the initial historical ETL**
 
@@ -175,6 +176,8 @@ The dashboard is organized into four sections:
 - **Current Portfolio & Rebalance** – build the monthly target portfolio, see sleeve weights, and view buy/sell/hold instructions for the selected date.
 - **Stock Ranking (Equity Sleeve Detail)** – choose a universe, date, and Top-N cutoff to inspect factor scores for the leading stocks.
 - **Performance & Alpha** – tune benchmark timing and implementation cost assumptions, then review monthly net/gross returns, turnover/cost history, and summary diagnostics (including tracking error and information ratio).
+
+Advanced tab defaults to read-only reporting (health, regime, portfolio/risk, ranking, performance, governance). Debug/write actions are hidden unless `SHOW_DEBUG_ADMIN=true`.
 
 ## Weekly Advisor Workflow (UI)
 
