@@ -23,6 +23,7 @@ from at_home_quant.db.models import (
     Base,
     DatasetSnapshot,
     RecommendationDecision,
+    WeeklyRecommendationExperimentLink,
     WeeklyRecommendationBatch,
     WeeklyRecommendationItem,
 )
@@ -32,6 +33,7 @@ from at_home_quant.portfolio.rebalance import diff_portfolios
 from at_home_quant.portfolio.service import build_monthly_portfolio
 from at_home_quant.regime.service import get_current_regime
 from at_home_quant.selection.service import rank_universe
+from at_home_quant.research.registry import link_weekly_batch_to_experiment, require_experiment
 
 
 def _serialize_positions(positions: list[TargetPosition]) -> str:
@@ -313,6 +315,7 @@ def generate_weekly_recommendation(
     top_n: int = 15,
     threshold: float = 0.005,
     data_snapshot_hash: str | None = None,
+    experiment_id: int | None = None,
     session: Session | None = None,
 ) -> WeeklyAdvisorReport:
     def _generate(session_obj: Session) -> WeeklyAdvisorReport:
@@ -338,6 +341,20 @@ def generate_weekly_recommendation(
             raise ValueError(
                 "Feature snapshot is older than requested as-of date. "
                 "Run backend pipeline for the selected date."
+            )
+        if experiment_id is None:
+            raise ValueError(
+                "Weekly recommendation requires an experiment id. "
+                "Run the backend pipeline first."
+            )
+        experiment = require_experiment(session_obj, experiment_id=experiment_id)
+        if experiment.feature_snapshot_hash != data_snapshot_hash:
+            raise ValueError(
+                "Experiment feature snapshot hash does not match recommendation data snapshot hash."
+            )
+        if experiment.run_type not in {"weekly_recommendation", "backend_weekly"}:
+            raise ValueError(
+                f"Experiment {experiment_id} has unsupported run_type '{experiment.run_type}'."
             )
         current_portfolio = get_latest_advisor_portfolio(
             snapshot_type="executed",
@@ -390,6 +407,7 @@ def generate_weekly_recommendation(
         )
         session_obj.add(batch)
         session_obj.flush()
+        link_weekly_batch_to_experiment(session_obj, batch_id=batch.id, experiment_id=experiment_id)
 
         for instruction in instructions:
             desired_action = instruction.action
@@ -444,6 +462,7 @@ def generate_weekly_recommendation(
             target_portfolio=target_portfolio,
             recommendations=recommendations,
             watchlist=watchlist,
+            experiment_id=experiment_id,
         )
 
     if session is not None:
@@ -503,6 +522,11 @@ def _load_batch_report(batch: WeeklyRecommendationBatch, session: Session) -> We
 
     watchlist_data = json.loads(batch.watchlist_json or "[]")
     watchlist = [AdvisorWatchItem(**item) for item in watchlist_data]
+    experiment_link = session.execute(
+        select(WeeklyRecommendationExperimentLink).where(
+            WeeklyRecommendationExperimentLink.batch_id == batch.id
+        )
+    ).scalars().first()
 
     return WeeklyAdvisorReport(
         batch_id=batch.id,
@@ -514,6 +538,7 @@ def _load_batch_report(batch: WeeklyRecommendationBatch, session: Session) -> We
         target_portfolio=target_portfolio,
         recommendations=recommendations,
         watchlist=watchlist,
+        experiment_id=(experiment_link.experiment_id if experiment_link is not None else None),
     )
 
 

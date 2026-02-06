@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from at_home_quant.backtest.models import WalkForwardConfig, WalkForwardRunResult
 from at_home_quant.config.settings import get_settings
-from at_home_quant.db.models import BacktestRun, Base, PriceDaily, Ticker
+from at_home_quant.db.models import BacktestRun, Base, DatasetSnapshot, PriceDaily, Ticker
 from at_home_quant.db.session import get_session
 from at_home_quant.performance.calc import (
     compute_benchmark_return_for_period,
@@ -23,6 +23,12 @@ from at_home_quant.performance.models import MonthlyPerformance
 from at_home_quant.performance.stats import compute_performance_summary
 from at_home_quant.portfolio.service import build_monthly_portfolio
 from at_home_quant.regime.service import get_current_regime
+from at_home_quant.research.registry import (
+    complete_experiment,
+    link_backtest_run_to_experiment,
+    register_experiment,
+    require_experiment,
+)
 
 
 def _json_default(value):
@@ -44,6 +50,16 @@ def _code_hash() -> str | None:
 
 
 def _data_snapshot_hash(session: Session, as_of_date: datetime.date) -> str:
+    snapshot = session.execute(
+        select(DatasetSnapshot.snapshot_hash)
+        .where(
+            DatasetSnapshot.layer == "feature",
+            DatasetSnapshot.as_of_date <= as_of_date,
+        )
+        .order_by(DatasetSnapshot.as_of_date.desc(), DatasetSnapshot.created_at.desc())
+    ).scalar_one_or_none()
+    if snapshot is not None:
+        return snapshot
     rows = session.execute(
         select(Ticker.symbol, func.count(PriceDaily.id), func.max(PriceDaily.date))
         .join(PriceDaily, PriceDaily.ticker_id == Ticker.id)
@@ -117,8 +133,11 @@ def _run(
     max_position: float,
     max_turnover: float,
     regime_getter,
+    experiment_id: int,
+    auto_complete_experiment: bool,
 ) -> WalkForwardRunResult:
     Base.metadata.create_all(bind=session.bind)
+    experiment = require_experiment(session, experiment_id=experiment_id)
     resolved_start, resolved_end = _resolve_date_bounds(session, start_date=start_date, end_date=end_date)
     rebalance_dates = _month_end_schedule(session, start_date=resolved_start, end_date=resolved_end)
     if len(rebalance_dates) < 2:
@@ -179,6 +198,12 @@ def _run(
         )
 
     summary = compute_performance_summary(monthly)
+    snapshot_hash = _data_snapshot_hash(session, as_of_date=resolved_end)
+    if experiment.feature_snapshot_hash != snapshot_hash:
+        raise ValueError(
+            "Experiment snapshot hash does not match backtest snapshot hash. "
+            "Re-register experiment against current snapshot."
+        )
     config = WalkForwardConfig(
         start_date=resolved_start,
         end_date=resolved_end,
@@ -193,13 +218,23 @@ def _run(
         start_date=resolved_start,
         end_date=resolved_end,
         code_hash=_code_hash(),
-        data_snapshot_hash=_data_snapshot_hash(session, as_of_date=resolved_end),
+        data_snapshot_hash=snapshot_hash,
         config_json=json.dumps(asdict(config), default=_json_default, sort_keys=True),
         summary_json=json.dumps(asdict(summary), default=_json_default, sort_keys=True),
         monthly_results_json=json.dumps([asdict(item) for item in monthly], default=_json_default, sort_keys=True),
     )
     session.add(run)
     session.flush()
+    link_backtest_run_to_experiment(session, backtest_run_id=run.id, experiment_id=experiment_id)
+    if auto_complete_experiment:
+        complete_experiment(
+            session=session,
+            experiment_id=experiment_id,
+            status="succeeded",
+            metrics=asdict(summary),
+            challenger_comparison={"baseline": "regime_benchmark"},
+            robustness_checks={},
+        )
     return WalkForwardRunResult(
         run_id=run.id,
         created_at=run.created_at,
@@ -221,6 +256,8 @@ def run_walk_forward_backtest(
     max_position: float | None = None,
     max_turnover: float | None = None,
     regime_getter=get_current_regime,
+    experiment_id: int | None = None,
+    auto_complete_experiment: bool = True,
     session: Session | None = None,
 ) -> WalkForwardRunResult:
     settings = get_settings()
@@ -232,33 +269,87 @@ def run_walk_forward_backtest(
     resolved_max_position = settings.risk_max_position if max_position is None else max_position
     resolved_max_turnover = settings.risk_max_turnover if max_turnover is None else max_turnover
 
-    if session is not None:
-        return _run(
-            session=session,
-            start_date=start_date,
-            end_date=end_date,
-            top_n=top_n,
-            benchmark_timing=resolved_benchmark_timing,
-            transaction_cost_bps=resolved_transaction_cost_bps,
-            slippage_bps=resolved_slippage_bps,
-            max_position=resolved_max_position,
-            max_turnover=resolved_max_turnover,
-            regime_getter=regime_getter,
+    def _ensure_experiment(session_obj: Session) -> int:
+        if experiment_id is not None:
+            require_experiment(session_obj, experiment_id=experiment_id)
+            return experiment_id
+        _, resolved_end = _resolve_date_bounds(session_obj, start_date=start_date, end_date=end_date)
+        row = register_experiment(
+            session=session_obj,
+            run_type="walk_forward_backtest",
+            as_of_date=resolved_end,
+            feature_snapshot_hash=_data_snapshot_hash(session_obj, as_of_date=resolved_end),
+            params={
+                "start_date": start_date,
+                "end_date": end_date,
+                "top_n": top_n,
+                "benchmark_timing": resolved_benchmark_timing,
+                "transaction_cost_bps": resolved_transaction_cost_bps,
+                "slippage_bps": resolved_slippage_bps,
+                "max_position": resolved_max_position,
+                "max_turnover": resolved_max_turnover,
+            },
+            window=None,
         )
+        return row.id
+
+    if session is not None:
+        resolved_experiment_id = _ensure_experiment(session)
+        try:
+            return _run(
+                session=session,
+                start_date=start_date,
+                end_date=end_date,
+                top_n=top_n,
+                benchmark_timing=resolved_benchmark_timing,
+                transaction_cost_bps=resolved_transaction_cost_bps,
+                slippage_bps=resolved_slippage_bps,
+                max_position=resolved_max_position,
+                max_turnover=resolved_max_turnover,
+                regime_getter=regime_getter,
+                experiment_id=resolved_experiment_id,
+                auto_complete_experiment=auto_complete_experiment,
+            )
+        except Exception as exc:  # noqa: BLE001
+            complete_experiment(
+                session=session,
+                experiment_id=resolved_experiment_id,
+                status="failed",
+                metrics={},
+                challenger_comparison={},
+                robustness_checks={},
+                error_message=str(exc),
+            )
+            raise
 
     with get_session() as session_obj:
-        return _run(
-            session=session_obj,
-            start_date=start_date,
-            end_date=end_date,
-            top_n=top_n,
-            benchmark_timing=resolved_benchmark_timing,
-            transaction_cost_bps=resolved_transaction_cost_bps,
-            slippage_bps=resolved_slippage_bps,
-            max_position=resolved_max_position,
-            max_turnover=resolved_max_turnover,
-            regime_getter=regime_getter,
-        )
+        resolved_experiment_id = _ensure_experiment(session_obj)
+        try:
+            return _run(
+                session=session_obj,
+                start_date=start_date,
+                end_date=end_date,
+                top_n=top_n,
+                benchmark_timing=resolved_benchmark_timing,
+                transaction_cost_bps=resolved_transaction_cost_bps,
+                slippage_bps=resolved_slippage_bps,
+                max_position=resolved_max_position,
+                max_turnover=resolved_max_turnover,
+                regime_getter=regime_getter,
+                experiment_id=resolved_experiment_id,
+                auto_complete_experiment=auto_complete_experiment,
+            )
+        except Exception as exc:  # noqa: BLE001
+            complete_experiment(
+                session=session_obj,
+                experiment_id=resolved_experiment_id,
+                status="failed",
+                metrics={},
+                challenger_comparison={},
+                robustness_checks={},
+                error_message=str(exc),
+            )
+            raise
 
 
 __all__ = ["run_walk_forward_backtest"]

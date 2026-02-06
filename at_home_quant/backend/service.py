@@ -17,6 +17,7 @@ from at_home_quant.data.quality import evaluate_price_quality
 from at_home_quant.db.models import BackendRun, DataLayerPrice, DatasetSnapshot, PriceDaily, Ticker
 from at_home_quant.db.session import get_session, init_db
 from at_home_quant.etl.daily_update import run_daily_update
+from at_home_quant.research.registry import complete_experiment, register_experiment
 
 
 SQLITE_SAFE_INSERT_BATCH_SIZE = 75
@@ -148,7 +149,9 @@ def run_backend_pipeline(
         run_id = run.id
 
     last_error: Exception | None = None
+    experiment_id: int | None = None
     for attempt in range(1, retries + 2):
+        attempt_experiment_id: int | None = None
         try:
             run_daily_update()
             with get_session() as session:
@@ -185,14 +188,41 @@ def run_backend_pipeline(
 
                 recommendation_batch_id = None
                 if include_weekly_recommendation:
+                    experiment = register_experiment(
+                        session=session,
+                        run_type="backend_weekly",
+                        as_of_date=resolved_as_of,
+                        feature_snapshot_hash=feature_snapshot.snapshot_hash,
+                        params={"top_n": top_n, "threshold": threshold, "retries": retries},
+                        window=None,
+                    )
+                    experiment_id = experiment.id
+                    attempt_experiment_id = experiment.id
                     report = generate_weekly_recommendation(
                         as_of_date=resolved_as_of,
                         top_n=top_n,
                         threshold=threshold,
                         data_snapshot_hash=feature_snapshot.snapshot_hash,
+                        experiment_id=experiment.id,
                         session=session,
                     )
                     recommendation_batch_id = report.batch_id
+                    complete_experiment(
+                        session=session,
+                        experiment_id=experiment.id,
+                        status="succeeded",
+                        metrics={
+                            "batch_id": report.batch_id,
+                            "recommendation_count": len(report.recommendations),
+                            "best_universe": report.best_universe,
+                            "best_universe_score": report.best_universe_score,
+                        },
+                        challenger_comparison={
+                            "baseline": "current_holdings",
+                            "notes": "Weekly recommendation model is compared against current executed book.",
+                        },
+                        robustness_checks={"trade_gate_enabled": settings.enable_trade_gating},
+                    )
 
                 run.status = "succeeded"
                 run.finished_at = datetime.datetime.utcnow()
@@ -206,9 +236,21 @@ def run_backend_pipeline(
                     data_snapshot_hash=feature_snapshot.snapshot_hash,
                     quality_summary=quality.summary(),
                     recommendation_batch_id=recommendation_batch_id,
+                    experiment_id=experiment_id,
                 )
         except Exception as exc:  # noqa: BLE001
             last_error = exc
+            if attempt_experiment_id is not None:
+                with get_session() as session:
+                    complete_experiment(
+                        session=session,
+                        experiment_id=attempt_experiment_id,
+                        status="failed",
+                        metrics={},
+                        challenger_comparison={},
+                        robustness_checks={},
+                        error_message=str(exc),
+                    )
             if attempt <= retries:
                 continue
 
@@ -217,6 +259,16 @@ def run_backend_pipeline(
         run.status = "failed"
         run.finished_at = datetime.datetime.utcnow()
         run.message = str(last_error) if last_error else "Unknown backend pipeline failure."
+        if experiment_id is not None:
+            complete_experiment(
+                session=session,
+                experiment_id=experiment_id,
+                status="failed",
+                metrics={},
+                challenger_comparison={},
+                robustness_checks={},
+                error_message=(str(last_error) if last_error else "Unknown backend pipeline failure."),
+            )
     if last_error is not None:
         raise last_error
     raise RuntimeError("Backend pipeline failed without exception detail.")

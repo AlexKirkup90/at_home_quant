@@ -42,6 +42,7 @@ class WeeklyAdvisorReport:
     target_portfolio: TargetPortfolio
     recommendations: list[AdvisorRecommendationItem]
     watchlist: list[AdvisorWatchItem]
+    experiment_id: int | None = None
 
 
 @dataclass

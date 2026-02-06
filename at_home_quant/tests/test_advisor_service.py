@@ -17,6 +17,7 @@ from at_home_quant.advisor.service import (
 from at_home_quant.data.tickers import BENCHMARKS, SAMPLE_NASDAQ100, TickerInfo, TickerType
 from at_home_quant.db.models import Base, DatasetSnapshot, PriceDaily, Ticker
 from at_home_quant.portfolio.models import TargetPosition
+from at_home_quant.research.registry import register_experiment
 
 
 def _add_ticker(session: Session, info: TickerInfo) -> int:
@@ -92,6 +93,19 @@ def _seed_feature_snapshot(session: Session, as_of_date: datetime.date, snapshot
     session.commit()
 
 
+def _seed_experiment(session: Session, as_of_date: datetime.date, snapshot_hash: str, run_type: str = "backend_weekly") -> int:
+    row = register_experiment(
+        session=session,
+        run_type=run_type,
+        as_of_date=as_of_date,
+        feature_snapshot_hash=snapshot_hash,
+        params={"top_n": 2},
+        window=None,
+    )
+    session.commit()
+    return row.id
+
+
 def test_weekly_advisor_flow_end_to_end():
     engine = create_engine("sqlite:///:memory:")
     as_of = datetime.date(2025, 2, 28)
@@ -116,15 +130,22 @@ def test_weekly_advisor_flow_end_to_end():
             snapshot_type="executed",
             session=session,
         )
+        experiment_id = _seed_experiment(session, as_of, "a" * 64)
 
         report = generate_weekly_recommendation(
-            as_of_date=as_of, top_n=2, data_snapshot_hash="a" * 64, session=session
+            as_of_date=as_of,
+            top_n=2,
+            data_snapshot_hash="a" * 64,
+            experiment_id=experiment_id,
+            session=session,
         )
         assert report.batch_id > 0
         assert report.recommendations
+        assert report.experiment_id == experiment_id
         latest_report = get_latest_weekly_report(as_of_date=as_of, session=session)
         assert latest_report is not None
         assert latest_report.batch_id == report.batch_id
+        assert latest_report.experiment_id == experiment_id
 
         for item in report.recommendations[:3]:
             log_decision(
@@ -163,9 +184,14 @@ def test_weekly_recommendation_applies_equivalence_and_trade_gating(monkeypatch)
         ]
         save_advisor_portfolio_snapshot(as_of_date=as_of, positions=positions, snapshot_type="baseline", session=session)
         save_advisor_portfolio_snapshot(as_of_date=as_of, positions=positions, snapshot_type="executed", session=session)
+        experiment_id = _seed_experiment(session, as_of, "b" * 64)
 
         report = generate_weekly_recommendation(
-            as_of_date=as_of, top_n=2, data_snapshot_hash="b" * 64, session=session
+            as_of_date=as_of,
+            top_n=2,
+            data_snapshot_hash="b" * 64,
+            experiment_id=experiment_id,
+            session=session,
         )
         by_ticker = {item.ticker: item for item in report.recommendations}
         # Equivalent mapping should keep user sleeve tickers instead of forcing GLD/BIL.
@@ -185,6 +211,7 @@ def test_weekly_recommendation_requires_valid_feature_snapshot_hash():
     as_of = datetime.date(2025, 2, 28)
     with Session(engine) as session:
         _seed_prices(session, as_of)
+        _seed_feature_snapshot(session, as_of, "d" * 64)
         positions = [
             TargetPosition("AAPL", 0.40, "equity"),
             TargetPosition("MSFT", 0.35, "equity"),
@@ -197,11 +224,20 @@ def test_weekly_recommendation_requires_valid_feature_snapshot_hash():
         with pytest.raises(ValueError, match="requires a data snapshot hash"):
             generate_weekly_recommendation(as_of_date=as_of, top_n=2, session=session)
 
+        with pytest.raises(ValueError, match="requires an experiment id"):
+            generate_weekly_recommendation(
+                as_of_date=as_of,
+                top_n=2,
+                data_snapshot_hash="d" * 64,
+                session=session,
+            )
+
         with pytest.raises(ValueError, match="was not found"):
             generate_weekly_recommendation(
                 as_of_date=as_of,
                 top_n=2,
                 data_snapshot_hash="f" * 64,
+                experiment_id=123,
                 session=session,
             )
 
@@ -213,6 +249,7 @@ def test_weekly_recommendation_is_deterministic_for_same_snapshot():
         _seed_prices(session, as_of)
         snapshot_hash = "c" * 64
         _seed_feature_snapshot(session, as_of, snapshot_hash)
+        experiment_id = _seed_experiment(session, as_of, snapshot_hash)
         positions = [
             TargetPosition("AAPL", 0.40, "equity"),
             TargetPosition("MSFT", 0.35, "equity"),
@@ -226,12 +263,14 @@ def test_weekly_recommendation_is_deterministic_for_same_snapshot():
             as_of_date=as_of,
             top_n=2,
             data_snapshot_hash=snapshot_hash,
+            experiment_id=experiment_id,
             session=session,
         )
         report_b = generate_weekly_recommendation(
             as_of_date=as_of,
             top_n=2,
             data_snapshot_hash=snapshot_hash,
+            experiment_id=experiment_id,
             session=session,
         )
 

@@ -81,6 +81,17 @@ class BacktestRun(Base):
     monthly_results_json = Column(Text, nullable=False)
 
 
+class FundamentalSnapshot(Base):
+    __tablename__ = "fundamental_snapshots"
+    __table_args__ = (UniqueConstraint("ticker_id", "as_of_date", name="uq_fundamental_ticker_date"),)
+
+    id = Column(Integer, primary_key=True)
+    ticker_id = Column(Integer, ForeignKey("tickers.id"), nullable=False, index=True)
+    as_of_date = Column(Date, nullable=False, index=True)
+    value_score = Column(Float, nullable=True)
+    shareholder_yield_score = Column(Float, nullable=True)
+
+
 class AdvisorPortfolioSnapshot(Base):
     __tablename__ = "advisor_portfolio_snapshots"
 
@@ -181,6 +192,49 @@ class DataLayerPrice(Base):
     layer = Column(String, nullable=False, index=True)
 
 
+class ExperimentRun(Base):
+    __tablename__ = "experiment_runs"
+
+    id = Column(Integer, primary_key=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow, index=True)
+    run_type = Column(String, nullable=False, index=True)
+    status = Column(String, nullable=False, default="running", index=True)  # running|succeeded|failed
+    as_of_date = Column(Date, nullable=False, index=True)
+    feature_snapshot_hash = Column(String, nullable=False, index=True)
+    params_json = Column(Text, nullable=False, default="{}")
+    code_hash = Column(String, nullable=True)
+    train_start = Column(Date, nullable=True, index=True)
+    train_end = Column(Date, nullable=True, index=True)
+    validation_start = Column(Date, nullable=True, index=True)
+    validation_end = Column(Date, nullable=True, index=True)
+    holdout_start = Column(Date, nullable=True, index=True)
+    holdout_end = Column(Date, nullable=True, index=True)
+    leakage_checks_passed = Column(Integer, nullable=False, default=0)  # 0|1 for SQLite portability
+    leakage_message = Column(Text, nullable=True)
+    metrics_json = Column(Text, nullable=False, default="{}")
+    challenger_json = Column(Text, nullable=False, default="{}")
+    robustness_json = Column(Text, nullable=False, default="{}")
+    artifact_path = Column(String, nullable=True)
+
+
+class WeeklyRecommendationExperimentLink(Base):
+    __tablename__ = "weekly_recommendation_experiment_links"
+    __table_args__ = (UniqueConstraint("batch_id", name="uq_weekly_batch_experiment"),)
+
+    id = Column(Integer, primary_key=True)
+    batch_id = Column(Integer, ForeignKey("weekly_recommendation_batches.id"), nullable=False, index=True)
+    experiment_id = Column(Integer, ForeignKey("experiment_runs.id"), nullable=False, index=True)
+
+
+class BacktestExperimentLink(Base):
+    __tablename__ = "backtest_experiment_links"
+    __table_args__ = (UniqueConstraint("backtest_run_id", name="uq_backtest_run_experiment"),)
+
+    id = Column(Integer, primary_key=True)
+    backtest_run_id = Column(Integer, ForeignKey("backtest_runs.id"), nullable=False, index=True)
+    experiment_id = Column(Integer, ForeignKey("experiment_runs.id"), nullable=False, index=True)
+
+
 __all__ = [
     "Base",
     "Ticker",
@@ -188,6 +242,7 @@ __all__ = [
     "PortfolioSnapshot",
     "UniverseMembership",
     "BacktestRun",
+    "FundamentalSnapshot",
     "AdvisorPortfolioSnapshot",
     "WeeklyRecommendationBatch",
     "WeeklyRecommendationItem",
@@ -195,4 +250,7 @@ __all__ = [
     "BackendRun",
     "DatasetSnapshot",
     "DataLayerPrice",
+    "ExperimentRun",
+    "WeeklyRecommendationExperimentLink",
+    "BacktestExperimentLink",
 ]

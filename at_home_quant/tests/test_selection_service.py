@@ -5,8 +5,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from at_home_quant.data.tickers import TickerInfo, TickerType, Universe
-from at_home_quant.db.models import Base, PriceDaily, Ticker
-from at_home_quant.selection.service import rank_universe
+from at_home_quant.db.models import Base, FundamentalSnapshot, PriceDaily, Ticker
+from at_home_quant.selection.service import _point_in_time_fundamentals, rank_universe
 
 
 def _seed_universe(session: Session, universe: Universe, symbols: list[str], as_of_date: datetime.date) -> None:
@@ -51,3 +51,45 @@ def test_rank_universe_end_to_end():
         composites = [s.composite_score for s in scores]
         assert composites == sorted(composites, reverse=True)
         assert all(s.ticker in symbols for s in scores)
+
+
+def test_point_in_time_fundamentals_do_not_use_future_snapshot():
+    engine = create_engine("sqlite:///:memory:")
+    with Session(engine) as session:
+        as_of = datetime.date(2025, 3, 31)
+        symbols = ["AAA"]
+        _seed_universe(session, Universe.NASDAQ100, symbols, as_of)
+        ticker = session.query(Ticker).filter(Ticker.symbol == "AAA").one()
+        session.add(
+            FundamentalSnapshot(
+                ticker_id=ticker.id,
+                as_of_date=datetime.date(2025, 2, 15),
+                value_score=0.10,
+                shareholder_yield_score=0.20,
+            )
+        )
+        session.add(
+            FundamentalSnapshot(
+                ticker_id=ticker.id,
+                as_of_date=datetime.date(2025, 4, 15),
+                value_score=0.95,
+                shareholder_yield_score=0.90,
+            )
+        )
+        session.commit()
+
+        early_value, early_shareholder = _point_in_time_fundamentals(
+            session=session,
+            symbol="AAA",
+            as_of_date=datetime.date(2025, 3, 1),
+        )
+        later_value, later_shareholder = _point_in_time_fundamentals(
+            session=session,
+            symbol="AAA",
+            as_of_date=datetime.date(2025, 5, 1),
+        )
+
+    assert early_value == 0.10
+    assert early_shareholder == 0.20
+    assert later_value == 0.95
+    assert later_shareholder == 0.90

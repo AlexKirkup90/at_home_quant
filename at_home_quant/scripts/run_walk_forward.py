@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import datetime
 
-from at_home_quant.backtest.service import run_walk_forward_backtest
+from at_home_quant.research.service import run_walk_forward_experiment
 
 
 def _format_pct(value: float | None) -> str:
@@ -13,8 +13,7 @@ def _format_pct(value: float | None) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run walk-forward backtest and persist run artifacts")
-    parser.add_argument("--start", help="Optional start date YYYY-MM-DD")
+    parser = argparse.ArgumentParser(description="Run walk-forward experiment and persist model report")
     parser.add_argument("--end", help="Optional end date YYYY-MM-DD")
     parser.add_argument("--top-n", type=int, default=15, help="Top N equities for each monthly rebalance")
     parser.add_argument(
@@ -26,14 +25,18 @@ def main() -> None:
     parser.add_argument("--slippage-bps", type=float, help="One-way slippage override.")
     parser.add_argument("--max-position", type=float, help="Maximum single position weight override.")
     parser.add_argument("--max-turnover", type=float, help="Maximum monthly turnover override.")
+    parser.add_argument("--train-months", type=int, default=36)
+    parser.add_argument("--validation-months", type=int, default=12)
+    parser.add_argument("--holdout-months", type=int, default=12)
     args = parser.parse_args()
 
-    start_date = datetime.date.fromisoformat(args.start) if args.start else None
     end_date = datetime.date.fromisoformat(args.end) if args.end else None
-    result = run_walk_forward_backtest(
-        start_date=start_date,
+    result = run_walk_forward_experiment(
         end_date=end_date,
         top_n=args.top_n,
+        train_months=args.train_months,
+        validation_months=args.validation_months,
+        holdout_months=args.holdout_months,
         benchmark_timing=args.benchmark_timing,
         transaction_cost_bps=args.transaction_cost_bps,
         slippage_bps=args.slippage_bps,
@@ -41,16 +44,21 @@ def main() -> None:
         max_turnover=args.max_turnover,
     )
 
-    print(f"Run ID:           {result.run_id}")
-    print(f"Created At:       {result.created_at.isoformat()}")
-    print(f"Code Hash:        {result.code_hash or 'N/A'}")
-    print(f"Data Snapshot:    {result.data_snapshot_hash}")
-    print(f"Periods:          {len(result.monthly)}")
-    print(f"Total Return:     {_format_pct(result.summary.total_return)}")
-    print(f"CAGR:             {_format_pct(result.summary.cagr)}")
-    print(f"Volatility:       {_format_pct(result.summary.volatility)}")
-    print(f"Max Drawdown:     {_format_pct(result.summary.max_drawdown)}")
-    print(f"Information Ratio:{result.summary.information_ratio:.2f}" if result.summary.information_ratio is not None else "Information Ratio:N/A")
+    print(f"Experiment ID:    {result.experiment_id}")
+    print(f"Run Type:         {result.run_type}")
+    print(f"As-Of Date:       {result.as_of_date.isoformat()}")
+    print(f"Data Snapshot:    {result.feature_snapshot_hash}")
+    print(f"Linked Backtest:  {result.linked_run_id}")
+    print(f"Total Return:     {_format_pct(result.metrics.get('total_return'))}")
+    print(f"CAGR:             {_format_pct(result.metrics.get('cagr'))}")
+    print(f"Volatility:       {_format_pct(result.metrics.get('volatility'))}")
+    print(f"Max Drawdown:     {_format_pct(result.metrics.get('max_drawdown'))}")
+    print(
+        f"Information Ratio:{result.metrics['information_ratio']:.2f}"
+        if result.metrics.get("information_ratio") is not None
+        else "Information Ratio:N/A"
+    )
+    print(f"Challenger vs SPY:{_format_pct(result.challenger_comparison.get('outperformance_vs_spy'))}")
 
 
 if __name__ == "__main__":

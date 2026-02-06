@@ -36,7 +36,7 @@ from at_home_quant.advisor.service import (
     save_advisor_portfolio_snapshot,
     save_executed_from_decisions,
 )
-from at_home_quant.backtest.service import run_walk_forward_backtest
+from at_home_quant.research.service import run_walk_forward_experiment
 from at_home_quant.data.tickers import Universe
 from at_home_quant.data.health import get_data_health_report
 from at_home_quant.db.models import PortfolioSnapshot, PriceDaily
@@ -280,7 +280,8 @@ def show_weekly_advisor_section() -> None:
                     f"Backend run {result.run_id} succeeded for {result.as_of_date.isoformat()}."
                 )
                 st.caption(
-                    f"snapshot={result.data_snapshot_hash} | recommendation_batch={result.recommendation_batch_id}"
+                    f"snapshot={result.data_snapshot_hash} | recommendation_batch={result.recommendation_batch_id} "
+                    f"| experiment={result.experiment_id}"
                 )
             except Exception as exc:  # noqa: BLE001
                 st.error(f"Backend run failed: {exc}")
@@ -348,7 +349,7 @@ def show_weekly_advisor_section() -> None:
                 st.success(
                     f"Recommendation batch {report.recommendation_batch_id} generated for {report.as_of_date.isoformat()}."
                 )
-                st.caption(f"snapshot={report.data_snapshot_hash}")
+                st.caption(f"snapshot={report.data_snapshot_hash} | experiment={report.experiment_id}")
             except Exception as exc:  # noqa: BLE001
                 st.error(f"Unable to generate recommendation: {exc}")
 
@@ -814,15 +815,15 @@ def show_admin_section() -> None:
 
     with col3:
         if st.button("Run Walk-Forward Backtest"):
-            with st.spinner("Running walk-forward backtest..."):
+            with st.spinner("Running walk-forward experiment..."):
                 try:
-                    result = run_walk_forward_backtest()
+                    result = run_walk_forward_experiment()
                     st.success(
-                        f"Backtest run {result.run_id} completed with {result.summary.months} monthly periods."
+                        f"Experiment {result.experiment_id} completed."
                     )
                     st.caption(
-                        "Backtest artifacts saved: "
-                        f"code_hash={result.code_hash or 'N/A'}, data_snapshot_hash={result.data_snapshot_hash}"
+                        "Model report includes challenger comparison and robustness checks. "
+                        f"linked_backtest_run={result.linked_run_id}"
                     )
                 except Exception as exc:  # noqa: BLE001
                     st.error(f"Walk-forward backtest failed: {exc}")

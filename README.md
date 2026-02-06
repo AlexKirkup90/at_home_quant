@@ -211,3 +211,25 @@ This pipeline performs:
 2. Versioned dataset snapshots for `raw`, `clean`, and `feature` layers (`dataset_snapshots` + `data_layer_prices`).
 3. Data quality gating (missingness, staleness, return outliers, adjustment-ratio sanity).
 4. Weekly recommendation generation linked to immutable `data_snapshot_hash`.
+
+## Research & Governance (Phase 2)
+
+Phase 2 adds experiment governance and leakage-aware research execution:
+
+- Experiment registry (`experiment_runs`) with:
+  - parameters,
+  - code hash,
+  - feature snapshot hash,
+  - train/validation/holdout boundaries,
+  - metrics/challenger/robustness payloads.
+- Weekly recommendations are now experiment-gated:
+  - recommendation generation requires both `data_snapshot_hash` and `experiment_id`,
+  - backend runs create and complete experiment records automatically.
+- Point-in-time feature joins now include fundamentals (if present) via `fundamental_snapshots` at `as_of_date` or earlier.
+- Walk-forward experiment runner with strict boundary checks:
+
+```bash
+python -m at_home_quant.scripts.run_walk_forward --end 2025-12-31 --train-months 36 --validation-months 12 --holdout-months 12
+```
+
+This produces a registered model report with challenger comparisons (SPY/QQQ/BIL) and robustness checks (regime stability + turnover-adjusted alpha persistence).

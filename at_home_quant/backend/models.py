@@ -12,6 +12,7 @@ class BackendPipelineResult:
     data_snapshot_hash: str | None
     quality_summary: str
     recommendation_batch_id: int | None = None
+    experiment_id: int | None = None
 
 
 __all__ = ["BackendPipelineResult"]

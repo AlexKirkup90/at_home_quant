@@ -24,7 +24,7 @@ def main() -> None:
     )
     print(
         f"Done. run_id={result.run_id} status={result.status} as_of={result.as_of_date} "
-        f"snapshot={result.data_snapshot_hash} batch={result.recommendation_batch_id}"
+        f"snapshot={result.data_snapshot_hash} batch={result.recommendation_batch_id} experiment={result.experiment_id}"
     )
 
 

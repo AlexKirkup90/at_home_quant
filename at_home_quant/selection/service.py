@@ -9,7 +9,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from at_home_quant.data.tickers import Universe
-from at_home_quant.db.models import PriceDaily, Ticker, UniverseMembership
+from at_home_quant.db.models import FundamentalSnapshot, PriceDaily, Ticker, UniverseMembership
 from at_home_quant.db.session import get_session
 from at_home_quant.selection.factors import (
     momentum_12m,
@@ -61,6 +61,29 @@ def _compute_factors_for_ticker(symbol: str, series: pd.Series) -> dict:
     }
 
 
+def _point_in_time_fundamentals(
+    session: Session,
+    symbol: str,
+    as_of_date: datetime.date,
+) -> tuple[float, float]:
+    row = session.execute(
+        select(FundamentalSnapshot.value_score, FundamentalSnapshot.shareholder_yield_score)
+        .join(Ticker, Ticker.id == FundamentalSnapshot.ticker_id)
+        .where(
+            Ticker.symbol == symbol,
+            FundamentalSnapshot.as_of_date <= as_of_date,
+        )
+        .order_by(FundamentalSnapshot.as_of_date.desc())
+    ).first()
+    if row is None:
+        return value_proxy(symbol), shareholder_yield_proxy(symbol)
+    value_score, shareholder_score = row
+    return (
+        value_proxy(symbol) if value_score is None else float(value_score),
+        shareholder_yield_proxy(symbol) if shareholder_score is None else float(shareholder_score),
+    )
+
+
 def _compute_universe_factors(session: Session, universe: Universe, as_of_date: datetime.date) -> pd.DataFrame:
     try:
         active_members = session.execute(
@@ -94,7 +117,11 @@ def _compute_universe_factors(session: Session, universe: Universe, as_of_date: 
         series = _load_price_series(session, symbol, as_of_date)
         if series.empty:
             continue
-        factors.append(_compute_factors_for_ticker(symbol, series))
+        factor = _compute_factors_for_ticker(symbol, series)
+        value_score, shareholder_score = _point_in_time_fundamentals(session, symbol, as_of_date)
+        factor["value"] = value_score
+        factor["shareholder_yield"] = shareholder_score
+        factors.append(factor)
     return pd.DataFrame(factors)
 
 
