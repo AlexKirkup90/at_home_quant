@@ -11,6 +11,11 @@ class MonthlyPerformance:
     benchmark_name: str
     benchmark_return: float
     alpha: float
+    portfolio_return_gross: Optional[float] = None
+    transaction_cost: float = 0.0
+    portfolio_turnover: float = 0.0
+    benchmark_timing: str = "period_start"
+    benchmark_selection_date: Optional[date] = None
 
 
 @dataclass

@@ -33,6 +33,9 @@ Data mode and health-gate controls:
 - `ENFORCE_DATA_HEALTH_GATE=true|false` (when true, portfolio/rebalance actions are blocked if required symbols are stale/missing).
 - `MIN_HISTORY_DAYS_FOR_REGIME=252` (minimum observations required for regime benchmark symbols).
 - `MAX_SYMBOL_STALENESS_DAYS=5` (maximum acceptable lag from requested as-of date).
+- `BENCHMARK_SELECTION_TIMING=period_start|period_end` (defaults to `period_start` to reduce look-ahead bias).
+- `TRANSACTION_COST_BPS=5` (one-way transaction cost applied to turnover in performance calculation).
+- `SLIPPAGE_BPS=5` (one-way slippage applied to turnover in performance calculation).
 
 3. **Run the initial historical ETL**
 
@@ -111,8 +114,9 @@ Snapshots are stored in the `portfolio_snapshots` table for historical inspectio
 Phase 5 measures how the constructed portfolio performs versus the best-scoring universe each month.
 
 - Monthly performance uses stored portfolio snapshots and DB price data to compute portfolio returns.
-- The benchmark for each month is chosen from NASDAQ100 (QQQ), S&P500 (SPY), or FTSE250 (VMID) based on the highest regime score at month-end.
-- Alpha is defined as `portfolio_return - benchmark_return` per month, with aggregates including CAGR, volatility, max drawdown, Sharpe, and cumulative alpha.
+- The benchmark for each month is chosen from NASDAQ100 (QQQ), S&P500 (SPY), or FTSE250 (VMID) using configurable timing (`BENCHMARK_SELECTION_TIMING=period_start|period_end`).
+- Portfolio returns include configurable implementation costs based on turnover (`TRANSACTION_COST_BPS` + `SLIPPAGE_BPS`).
+- Alpha is defined as `portfolio_return(net) - benchmark_return` per month, with aggregates including CAGR, volatility, max drawdown, Sharpe, and cumulative alpha.
 - CLI helper:
 
 ```bash

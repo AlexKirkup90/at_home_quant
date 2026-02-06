@@ -29,6 +29,18 @@ class Settings(BaseSettings):
         5,
         description="Maximum allowed lag (days) between required symbol data and the requested as-of date.",
     )
+    benchmark_selection_timing: Literal["period_start", "period_end"] = Field(
+        "period_start",
+        description="Date used to choose the benchmark universe for each performance period.",
+    )
+    transaction_cost_bps: float = Field(
+        5.0,
+        description="One-way transaction cost in basis points applied to portfolio turnover.",
+    )
+    slippage_bps: float = Field(
+        5.0,
+        description="One-way slippage in basis points applied to portfolio turnover.",
+    )
     benchmark_tickers: List[str] = Field(
         default_factory=lambda: ["QQQ", "SPY", "VMID", "GLD", "IAU", "BIL"],
         description="Default benchmark/asset tickers to fetch",

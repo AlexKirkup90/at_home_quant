@@ -5,6 +5,7 @@ import csv
 from dataclasses import asdict
 from typing import List
 
+from at_home_quant.config.settings import get_settings
 from at_home_quant.performance.service import get_monthly_performance, get_performance_summary
 
 
@@ -17,20 +18,59 @@ def _format_pct(value: float | None) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Print monthly performance and summary stats")
     parser.add_argument("--csv", dest="csv_path", help="Optional path to export monthly performance as CSV")
+    parser.add_argument(
+        "--benchmark-timing",
+        choices=["period_start", "period_end"],
+        help="When to select benchmark universe for each period (defaults to configured setting).",
+    )
+    parser.add_argument(
+        "--transaction-cost-bps",
+        type=float,
+        help="Override one-way transaction cost in basis points.",
+    )
+    parser.add_argument(
+        "--slippage-bps",
+        type=float,
+        help="Override one-way slippage in basis points.",
+    )
     args = parser.parse_args()
 
-    monthly = get_monthly_performance()
-    summary = get_performance_summary()
+    settings = get_settings()
+    benchmark_timing = args.benchmark_timing or settings.benchmark_selection_timing
+    transaction_cost_bps = (
+        settings.transaction_cost_bps if args.transaction_cost_bps is None else args.transaction_cost_bps
+    )
+    slippage_bps = settings.slippage_bps if args.slippage_bps is None else args.slippage_bps
+
+    monthly = get_monthly_performance(
+        benchmark_timing=benchmark_timing,
+        transaction_cost_bps=transaction_cost_bps,
+        slippage_bps=slippage_bps,
+    )
+    summary = get_performance_summary(
+        benchmark_timing=benchmark_timing,
+        transaction_cost_bps=transaction_cost_bps,
+        slippage_bps=slippage_bps,
+    )
+
+    print(
+        f"Assumptions: benchmark_timing={benchmark_timing}, "
+        f"transaction_cost_bps={transaction_cost_bps:.2f}, slippage_bps={slippage_bps:.2f}"
+    )
 
     print("Monthly Performance")
     print(
-        f"{'Start':<12} {'End':<12} {'Port Ret':>10} {'Benchmark':>12} {'Bench Ret':>10} {'Alpha':>10}"
+        f"{'Start':<12} {'End':<12} {'Gross':>9} {'Cost':>8} {'Net':>9} "
+        f"{'Benchmark':>10} {'Bench Ret':>10} {'Alpha':>10}"
     )
     for item in monthly:
         highlight = "" if abs(item.alpha) < 0.02 else ("+" if item.alpha > 0 else "-")
+        gross_return = item.portfolio_return_gross if item.portfolio_return_gross is not None else item.portfolio_return
         print(
             f"{item.period_start} {item.period_end} "
-            f"{_format_pct(item.portfolio_return):>10} {item.benchmark_name:>12} "
+            f"{_format_pct(gross_return):>9} "
+            f"{_format_pct(item.transaction_cost):>8} "
+            f"{_format_pct(item.portfolio_return):>9} {item.benchmark_name:>10} "
             f"{_format_pct(item.benchmark_return):>10} {highlight}{_format_pct(item.alpha):>9}"
         )
 
@@ -53,7 +93,12 @@ def main() -> None:
                     "period_start",
                     "period_end",
                     "portfolio_return",
+                    "portfolio_return_gross",
+                    "transaction_cost",
+                    "portfolio_turnover",
                     "benchmark_name",
+                    "benchmark_timing",
+                    "benchmark_selection_date",
                     "benchmark_return",
                     "alpha",
                 ],

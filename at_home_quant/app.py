@@ -292,6 +292,7 @@ def show_ranking_section() -> None:
 def show_performance_section() -> None:
     require_streamlit()
     st.header("Performance & Alpha")
+    settings = get_settings()
 
     try:
         monthly = get_monthly_performance()
@@ -305,6 +306,13 @@ def show_performance_section() -> None:
         st.info("Performance data is unavailable. Build portfolios and run performance calculation first.")
         st.caption(str(exc))
         return
+
+    st.caption(
+        "Assumptions: "
+        f"benchmark timing={settings.benchmark_selection_timing}, "
+        f"transaction cost={settings.transaction_cost_bps:.2f}bps, "
+        f"slippage={settings.slippage_bps:.2f}bps."
+    )
 
     st.subheader("Monthly performance")
     monthly_df = performance_to_dataframe(monthly)

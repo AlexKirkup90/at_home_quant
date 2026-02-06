@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import datetime
+import json
 from typing import Iterable, List, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from at_home_quant.config.settings import get_settings
 from at_home_quant.data.tickers import UNIVERSE_BENCHMARK_SYMBOL, Universe
 from at_home_quant.db.models import PortfolioSnapshot, PriceDaily, Ticker
 from at_home_quant.db.session import get_session
@@ -56,8 +58,12 @@ def compute_benchmark_return_for_period(
     end_date: datetime.date,
     session: Session,
     regime_getter=get_current_regime,
+    benchmark_timing: str = "period_start",
 ) -> Tuple[str, float]:
-    decision = regime_getter(end_date, session=session)
+    if benchmark_timing not in {"period_start", "period_end"}:
+        raise ValueError(f"Unsupported benchmark_timing: {benchmark_timing}")
+    decision_date = start_date if benchmark_timing == "period_start" else end_date
+    decision = regime_getter(decision_date, session=session)
     universe_key = decision.best_universe
     universe_enum = None
     if isinstance(universe_key, Universe):
@@ -81,8 +87,6 @@ def compute_benchmark_return_for_period(
 
 
 def _snapshot_to_portfolio(snapshot: PortfolioSnapshot) -> TargetPortfolio:
-    import json
-
     positions = _deserialize_positions(json.loads(snapshot.positions_json))
     return TargetPortfolio(
         as_of_date=snapshot.as_of_date,
@@ -93,10 +97,29 @@ def _snapshot_to_portfolio(snapshot: PortfolioSnapshot) -> TargetPortfolio:
     )
 
 
+def compute_portfolio_turnover(
+    previous_portfolio: TargetPortfolio,
+    next_portfolio: TargetPortfolio,
+) -> float:
+    previous = {position.ticker: position.weight for position in previous_portfolio.positions}
+    nxt = {position.ticker: position.weight for position in next_portfolio.positions}
+    tickers = set(previous) | set(nxt)
+    gross_weight_change = sum(abs(nxt.get(ticker, 0.0) - previous.get(ticker, 0.0)) for ticker in tickers)
+    return 0.5 * gross_weight_change
+
+
 def compute_monthly_performance_series(
     session: Session | None = None,
     regime_getter=get_current_regime,
+    benchmark_timing: str | None = None,
+    transaction_cost_bps: float | None = None,
+    slippage_bps: float | None = None,
 ) -> List[MonthlyPerformance]:
+    settings = get_settings()
+    resolved_benchmark_timing = benchmark_timing or settings.benchmark_selection_timing
+    resolved_transaction_cost_bps = settings.transaction_cost_bps if transaction_cost_bps is None else transaction_cost_bps
+    resolved_slippage_bps = settings.slippage_bps if slippage_bps is None else slippage_bps
+
     def _compute(session_obj: Session) -> List[MonthlyPerformance]:
         snapshots: Iterable[PortfolioSnapshot] = session_obj.execute(
             select(PortfolioSnapshot).order_by(PortfolioSnapshot.as_of_date)
@@ -105,20 +128,35 @@ def compute_monthly_performance_series(
         performances: List[MonthlyPerformance] = []
         for prev, curr in zip(snapshots_list, snapshots_list[1:]):
             start_portfolio = _snapshot_to_portfolio(prev)
-            portfolio_return = compute_portfolio_return_for_period(
+            end_portfolio = _snapshot_to_portfolio(curr)
+            gross_portfolio_return = compute_portfolio_return_for_period(
                 prev.as_of_date, curr.as_of_date, start_portfolio, session_obj
             )
+            turnover = compute_portfolio_turnover(start_portfolio, end_portfolio)
+            total_cost_bps = resolved_transaction_cost_bps + resolved_slippage_bps
+            transaction_cost = turnover * (total_cost_bps / 10_000)
+            net_portfolio_return = gross_portfolio_return - transaction_cost
             benchmark_name, benchmark_return = compute_benchmark_return_for_period(
-                prev.as_of_date, curr.as_of_date, session_obj, regime_getter=regime_getter
+                prev.as_of_date,
+                curr.as_of_date,
+                session_obj,
+                regime_getter=regime_getter,
+                benchmark_timing=resolved_benchmark_timing,
             )
+            benchmark_selection_date = prev.as_of_date if resolved_benchmark_timing == "period_start" else curr.as_of_date
             performances.append(
                 MonthlyPerformance(
                     period_start=prev.as_of_date,
                     period_end=curr.as_of_date,
-                    portfolio_return=portfolio_return,
+                    portfolio_return=net_portfolio_return,
                     benchmark_name=benchmark_name,
                     benchmark_return=benchmark_return,
-                    alpha=portfolio_return - benchmark_return,
+                    alpha=net_portfolio_return - benchmark_return,
+                    portfolio_return_gross=gross_portfolio_return,
+                    transaction_cost=transaction_cost,
+                    portfolio_turnover=turnover,
+                    benchmark_timing=resolved_benchmark_timing,
+                    benchmark_selection_date=benchmark_selection_date,
                 )
             )
         return performances
@@ -132,6 +170,7 @@ def compute_monthly_performance_series(
 
 __all__ = [
     "compute_portfolio_return_for_period",
+    "compute_portfolio_turnover",
     "compute_benchmark_return_for_period",
     "compute_monthly_performance_series",
 ]
