@@ -18,7 +18,14 @@ from at_home_quant.advisor.models import (
     WorkflowDecisionInput,
 )
 from at_home_quant.config.settings import get_settings
-from at_home_quant.data.tickers import TickerInfo, TickerType, canonical_symbol, equivalent_symbols
+from at_home_quant.data.tickers import (
+    TickerInfo,
+    TickerType,
+    UNIVERSE_BENCHMARK_SYMBOL,
+    Universe,
+    canonical_symbol,
+    equivalent_symbols,
+)
 from at_home_quant.db import crud
 from at_home_quant.db.models import (
     AdvisorPortfolioSnapshot,
@@ -32,7 +39,12 @@ from at_home_quant.db.models import (
     Ticker,
 )
 from at_home_quant.db.session import get_session
-from at_home_quant.portfolio.models import TargetPortfolio, TargetPosition
+from at_home_quant.portfolio.execution import (
+    apply_pretrade_policy,
+    estimate_execution_cost,
+    evaluate_pretrade_checks,
+)
+from at_home_quant.portfolio.models import RebalanceInstruction, TargetPortfolio, TargetPosition
 from at_home_quant.portfolio.rebalance import diff_portfolios
 from at_home_quant.portfolio.service import build_monthly_portfolio
 from at_home_quant.regime.service import get_current_regime
@@ -289,6 +301,42 @@ def _reason_tag(ticker: str, action: str, respect_current_book: bool) -> str:
     return "normalization"
 
 
+def _summarize_pretrade_report(pretrade: dict) -> dict:
+    return {
+        "is_passing": bool(pretrade.get("is_passing", True)),
+        "blocked_count": int(pretrade.get("blocked_count", 0)),
+        "portfolio_value_usd": float(pretrade.get("portfolio_value_usd", 0.0)),
+        "min_ticket_usd": float(pretrade.get("min_ticket_usd", 0.0)),
+        "max_adv_participation_limit": float(pretrade.get("max_adv_participation_limit", 0.0)),
+        "max_adv_participation_seen": float(pretrade.get("max_adv_participation_seen", 0.0)),
+        "estimated_shortfall_pct": float(pretrade.get("estimated_shortfall_pct", 0.0)),
+        "estimated_shortfall_usd": float(pretrade.get("estimated_shortfall_usd", 0.0)),
+    }
+
+
+def _build_pretrade_report_from_recommendations(
+    as_of_date: datetime.date,
+    recommendations: Iterable[AdvisorRecommendationItem],
+    session: Session,
+) -> tuple[dict, list[dict]]:
+    instructions = [
+        RebalanceInstruction(
+            ticker=item.ticker,
+            action=item.recommendation,
+            current_weight=item.current_weight,
+            target_weight=item.target_weight,
+            delta=item.delta,
+        )
+        for item in recommendations
+    ]
+    pretrade = evaluate_pretrade_checks(
+        session=session,
+        instructions=instructions,
+        as_of_date=as_of_date,
+    )
+    return _summarize_pretrade_report(pretrade), pretrade.get("checks", [])
+
+
 def _build_watchlist(
     as_of_date: datetime.date,
     best_universe: str,
@@ -399,6 +447,13 @@ def generate_weekly_recommendation(
 
         regime = get_current_regime(as_of_date, session=session_obj)
         instructions = diff_portfolios(current=current_portfolio, target=target_portfolio, threshold=0.0)
+        pretrade_report = evaluate_pretrade_checks(
+            session=session_obj,
+            instructions=instructions,
+            as_of_date=as_of_date,
+        )
+        if settings.data_mode == "production":
+            instructions = apply_pretrade_policy(instructions, pretrade_report)
         recommendations: list[AdvisorRecommendationItem] = []
         gate_floor = _trade_gate_floor(settings) if settings.enable_trade_gating else threshold
         batch = WeeklyRecommendationBatch(
@@ -415,6 +470,7 @@ def generate_weekly_recommendation(
 
         for instruction in instructions:
             desired_action = instruction.action
+            blocked_reason = instruction.policy_reason
             if abs(instruction.delta) < gate_floor:
                 desired_action = "hold"
             reason_tag = _reason_tag(
@@ -422,7 +478,10 @@ def generate_weekly_recommendation(
                 action=desired_action,
                 respect_current_book=settings.respect_current_book_mode,
             )
-            rationale = _action_rationale(reason_tag, desired_action, instruction.delta, gate_floor)
+            if blocked_reason:
+                rationale = f"[CAPACITY] {blocked_reason}"
+            else:
+                rationale = _action_rationale(reason_tag, desired_action, instruction.delta, gate_floor)
             row = WeeklyRecommendationItem(
                 batch_id=batch.id,
                 ticker=instruction.ticker,
@@ -467,6 +526,8 @@ def generate_weekly_recommendation(
             recommendations=recommendations,
             watchlist=watchlist,
             experiment_id=experiment_id,
+            pretrade_summary=_summarize_pretrade_report(pretrade_report),
+            pretrade_checks=pretrade_report.get("checks", []),
         )
 
     if session is not None:
@@ -531,6 +592,17 @@ def _load_batch_report(batch: WeeklyRecommendationBatch, session: Session) -> We
             WeeklyRecommendationExperimentLink.batch_id == batch.id
         )
     ).scalars().first()
+    pretrade_summary, pretrade_checks = _build_pretrade_report_from_recommendations(
+        as_of_date=batch.as_of_date,
+        recommendations=recommendations,
+        session=session,
+    )
+    blocked_count_from_rationale = sum(
+        1 for item in recommendations if "pre-trade block" in item.rationale.lower()
+    )
+    if blocked_count_from_rationale > pretrade_summary["blocked_count"]:
+        pretrade_summary["blocked_count"] = blocked_count_from_rationale
+        pretrade_summary["is_passing"] = blocked_count_from_rationale == 0
 
     return WeeklyAdvisorReport(
         batch_id=batch.id,
@@ -543,6 +615,8 @@ def _load_batch_report(batch: WeeklyRecommendationBatch, session: Session) -> We
         recommendations=recommendations,
         watchlist=watchlist,
         experiment_id=(experiment_link.experiment_id if experiment_link is not None else None),
+        pretrade_summary=pretrade_summary,
+        pretrade_checks=pretrade_checks,
     )
 
 
@@ -672,10 +746,14 @@ def get_weekly_outcome_report(
         items: list[WeeklyOutcomeItem] = []
         model_active_return = 0.0
         decision_active_return = 0.0
+        model_portfolio_return = 0.0
+        decision_portfolio_return = 0.0
         follow_hits = 0
         follow_total = 0
         ignored_positive = 0
         resolved_eval_dates: list[datetime.date] = []
+        model_implementation_shortfall = 0.0
+        decision_implementation_shortfall = 0.0
 
         for item in report.recommendations:
             start_price = _latest_price_on_or_before(session_obj, item.ticker, batch.as_of_date)
@@ -705,6 +783,23 @@ def get_weekly_outcome_report(
             impact_gap = decision_impact - model_impact
             model_active_return += model_impact
             decision_active_return += decision_impact
+            model_portfolio_return += item.target_weight * forward_return
+            decision_portfolio_return += effective_weight * forward_return
+
+            model_cost_estimate = estimate_execution_cost(
+                session=session_obj,
+                symbol=item.ticker,
+                abs_delta_weight=abs(model_delta),
+                as_of_date=batch.as_of_date,
+            )
+            decision_cost_estimate = estimate_execution_cost(
+                session=session_obj,
+                symbol=item.ticker,
+                abs_delta_weight=abs(decision_delta),
+                as_of_date=batch.as_of_date,
+            )
+            model_implementation_shortfall += float(model_cost_estimate["cost_pct_of_portfolio"])
+            decision_implementation_shortfall += float(decision_cost_estimate["cost_pct_of_portfolio"])
 
             if decision == "follow":
                 follow_total += 1
@@ -732,6 +827,22 @@ def get_weekly_outcome_report(
             return None
 
         evaluation_date = max(resolved_eval_dates) if resolved_eval_dates else desired_eval_date
+        benchmark_return = None
+        model_vs_benchmark = None
+        decision_vs_benchmark = None
+        try:
+            universe = Universe[batch.best_universe]
+            benchmark_symbol = UNIVERSE_BENCHMARK_SYMBOL.get(universe)
+        except Exception:  # noqa: BLE001
+            benchmark_symbol = None
+        if benchmark_symbol:
+            benchmark_start = _latest_price_on_or_before(session_obj, benchmark_symbol, batch.as_of_date)
+            benchmark_end = _latest_price_on_or_before(session_obj, benchmark_symbol, evaluation_date)
+            if benchmark_start is not None and benchmark_end is not None and benchmark_start[1] != 0:
+                benchmark_return = (benchmark_end[1] / benchmark_start[1]) - 1.0
+                model_vs_benchmark = model_portfolio_return - benchmark_return
+                decision_vs_benchmark = decision_portfolio_return - benchmark_return
+
         return WeeklyOutcomeReport(
             batch_id=batch.id,
             as_of_date=batch.as_of_date,
@@ -743,6 +854,14 @@ def get_weekly_outcome_report(
             decision_alpha=(decision_active_return - model_active_return),
             follow_hit_rate=(None if follow_total == 0 else (follow_hits / follow_total)),
             ignored_positive_count=ignored_positive,
+            model_portfolio_return=model_portfolio_return,
+            decision_portfolio_return=decision_portfolio_return,
+            benchmark_return=benchmark_return,
+            model_vs_benchmark=model_vs_benchmark,
+            decision_vs_benchmark=decision_vs_benchmark,
+            model_implementation_shortfall=model_implementation_shortfall,
+            decision_implementation_shortfall=decision_implementation_shortfall,
+            shortfall_gap=(decision_implementation_shortfall - model_implementation_shortfall),
         )
 
     if session is not None:

@@ -223,12 +223,18 @@ def run_backend_pipeline(
                             "recommendation_count": len(report.recommendations),
                             "best_universe": report.best_universe,
                             "best_universe_score": report.best_universe_score,
+                            "pretrade_blocked_count": report.pretrade_summary.get("blocked_count", 0),
+                            "pretrade_shortfall_pct": report.pretrade_summary.get("estimated_shortfall_pct", 0.0),
                         },
                         challenger_comparison={
                             "baseline": "current_holdings",
                             "notes": "Weekly recommendation model is compared against current executed book.",
                         },
-                        robustness_checks={"trade_gate_enabled": settings.enable_trade_gating},
+                        robustness_checks={
+                            "trade_gate_enabled": settings.enable_trade_gating,
+                            "pretrade_is_passing": report.pretrade_summary.get("is_passing", True),
+                            "max_adv_participation_seen": report.pretrade_summary.get("max_adv_participation_seen", 0.0),
+                        },
                     )
 
                 run.status = "succeeded"

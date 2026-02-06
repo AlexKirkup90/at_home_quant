@@ -49,6 +49,10 @@ class Settings(BaseSettings):
         0.35,
         description="Maximum target aggregate weight for any single equity sector.",
     )
+    risk_max_region_weight: float = Field(
+        0.75,
+        description="Maximum target aggregate weight for any single equity region.",
+    )
     risk_max_turnover: float = Field(
         0.35,
         description="Maximum monthly portfolio turnover allowed by the risk overlay.",
@@ -76,6 +80,22 @@ class Settings(BaseSettings):
     enable_trade_gating: bool = Field(
         True,
         description="If true, suppresses low-signal trades using min-size and cost-aware gates.",
+    )
+    execution_portfolio_value_usd: float = Field(
+        250_000.0,
+        description="Portfolio notional (USD) used for pre-trade capacity and cost estimates.",
+    )
+    execution_min_ticket_usd: float = Field(
+        1_000.0,
+        description="Minimum trade ticket size in USD for actionable recommendations.",
+    )
+    execution_max_adv_participation: float = Field(
+        0.10,
+        description="Maximum one-day ADV participation allowed for a single trade.",
+    )
+    execution_impact_bps_at_10pct_adv: float = Field(
+        15.0,
+        description="Estimated market impact (bps) at 10% ADV participation.",
     )
     show_debug_admin: bool = Field(
         False,

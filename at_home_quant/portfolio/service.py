@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from at_home_quant.config.settings import get_settings
 from at_home_quant.data.health import assert_data_health_for_portfolio
-from at_home_quant.data.tickers import sector_for_symbol
+from at_home_quant.data.tickers import region_for_symbol, sector_for_symbol
 from at_home_quant.db.models import Base, PortfolioSnapshot, PriceDaily, Ticker
 from at_home_quant.db.session import get_session
 from at_home_quant.portfolio.models import (
@@ -19,6 +19,7 @@ from at_home_quant.portfolio.models import (
     TargetPortfolio,
     TargetPosition,
 )
+from at_home_quant.portfolio.execution import apply_pretrade_policy, evaluate_pretrade_checks
 from at_home_quant.portfolio.optimizer import (
     build_defensive_positions,
     build_equity_positions,
@@ -241,6 +242,7 @@ def _build_risk_report(
     adv_by_ticker: dict[str, float | None],
     max_position: float,
     max_sector_weight: float,
+    max_region_weight: float,
     max_turnover: float,
     min_adv_usd: float,
 ) -> PortfolioRiskReport:
@@ -275,6 +277,25 @@ def _build_risk_report(
                 ),
                 current_value=max_sector,
                 limit_value=max_sector_weight,
+            )
+        )
+
+    region_weights: dict[str, float] = {}
+    for position in portfolio.positions:
+        if position.asset_type != "equity":
+            continue
+        region = region_for_symbol(position.ticker)
+        region_weights[region] = region_weights.get(region, 0.0) + position.weight
+    max_region = max(region_weights.values()) if region_weights else 0.0
+    if max_region > max_region_weight + 1e-9:
+        violations.append(
+            RiskConstraintViolation(
+                code="region_cap_breach",
+                message=(
+                    f"Max region weight {max_region:.2%} exceeds limit {max_region_weight:.2%}."
+                ),
+                current_value=max_region,
+                limit_value=max_region_weight,
             )
         )
 
@@ -316,6 +337,7 @@ def _build_risk_report(
         as_of_date=portfolio.as_of_date,
         max_position_weight=max_position_weight,
         max_sector_weight=max_sector,
+        max_region_weight=max_region,
         turnover=turnover,
         min_adv_usd_in_portfolio=min_adv_in_portfolio,
         violations=violations,
@@ -367,6 +389,7 @@ def build_monthly_portfolio(
         settings = get_settings()
         resolved_max_position = settings.risk_max_position if max_position is None else max_position
         resolved_max_sector_weight = settings.risk_max_sector_weight
+        resolved_max_region_weight = settings.risk_max_region_weight
         resolved_max_turnover = settings.risk_max_turnover
         resolved_min_adv = settings.risk_min_adv_usd
         resolved_adv_lookback = settings.risk_adv_lookback_days
@@ -430,6 +453,7 @@ def build_monthly_portfolio(
             adv_by_ticker=adv_by_ticker,
             max_position=resolved_max_position,
             max_sector_weight=resolved_max_sector_weight,
+            max_region_weight=resolved_max_region_weight,
             max_turnover=resolved_max_turnover,
             min_adv_usd=resolved_min_adv,
         )
@@ -455,6 +479,7 @@ def compute_rebalance(
     session: Session | None = None,
 ) -> List[RebalanceInstruction]:
     def _compute(session_obj: Session) -> List[RebalanceInstruction]:
+        settings = get_settings()
         current = _load_last_snapshot(session_obj, before_date=as_of_date)
         if current is None:
             raise ValueError(f"No prior portfolio snapshot available before {as_of_date}")
@@ -464,7 +489,15 @@ def compute_rebalance(
             persist_snapshot=False,
             session=session_obj,
         )
-        return diff_portfolios(current=current, target=target, threshold=threshold)
+        instructions = diff_portfolios(current=current, target=target, threshold=threshold)
+        pretrade_report = evaluate_pretrade_checks(
+            session=session_obj,
+            instructions=instructions,
+            as_of_date=as_of_date,
+        )
+        if settings.data_mode == "production":
+            instructions = apply_pretrade_policy(instructions, pretrade_report)
+        return instructions
 
     if session is not None:
         return _compute(session)

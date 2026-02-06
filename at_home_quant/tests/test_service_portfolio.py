@@ -79,6 +79,7 @@ def test_end_to_end_portfolio_and_rebalance():
         instructions = compute_rebalance(as_of_second, session=session)
         assert instructions
         assert all(instr.action in {"buy", "sell", "hold"} for instr in instructions)
+        assert all(instr.policy_status in {"pass", "blocked"} for instr in instructions)
         # Rebalance is read-only and must not write a new snapshot.
         assert session.query(PortfolioSnapshot).count() == 1
 

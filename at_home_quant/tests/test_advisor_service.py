@@ -143,10 +143,12 @@ def test_weekly_advisor_flow_end_to_end():
         assert report.batch_id > 0
         assert report.recommendations
         assert report.experiment_id == experiment_id
+        assert "blocked_count" in report.pretrade_summary
         latest_report = get_latest_weekly_report(as_of_date=as_of, session=session)
         assert latest_report is not None
         assert latest_report.batch_id == report.batch_id
         assert latest_report.experiment_id == experiment_id
+        assert "estimated_shortfall_pct" in latest_report.pretrade_summary
 
         for item in report.recommendations[:3]:
             log_decision(
@@ -340,3 +342,5 @@ def test_weekly_outcome_report_computes_decision_alpha():
         assert outcome.evaluation_date >= as_of
         assert outcome.items
         assert isinstance(outcome.decision_alpha, float)
+        assert outcome.model_implementation_shortfall >= 0
+        assert outcome.decision_implementation_shortfall >= 0

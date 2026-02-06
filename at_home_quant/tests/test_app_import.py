@@ -36,5 +36,13 @@ def test_rebalance_to_dataframe():
     df = rebalance_to_dataframe(instructions)
 
     assert not df.empty
-    assert set(df.columns) == {"ticker", "action", "current_weight", "target_weight", "delta"}
+    assert set(df.columns) == {
+        "ticker",
+        "action",
+        "current_weight",
+        "target_weight",
+        "delta",
+        "policy_status",
+        "policy_reason",
+    }
     assert df.shape[0] == 2

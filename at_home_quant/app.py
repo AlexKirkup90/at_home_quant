@@ -372,6 +372,37 @@ def show_weekly_advisor_section() -> None:
         f"Batch {report.batch_id} | As-of {report.as_of_date.isoformat()} | "
         f"Best universe {report.best_universe} (score {report.best_universe_score:.2f})"
     )
+    pretrade_summary = report.pretrade_summary or {}
+    st.markdown("**Pre-Trade Risk & Capacity Check**")
+    pcol1, pcol2, pcol3, pcol4 = st.columns(4)
+    pcol1.metric("Status", "PASS" if pretrade_summary.get("is_passing", True) else "BLOCKED")
+    pcol2.metric("Blocked Trades", str(pretrade_summary.get("blocked_count", 0)))
+    pcol3.metric(
+        "Expected Shortfall",
+        _format_pct(float(pretrade_summary.get("estimated_shortfall_pct", 0.0))),
+    )
+    pcol4.metric(
+        "Max ADV Usage",
+        _format_pct(float(pretrade_summary.get("max_adv_participation_seen", 0.0))),
+    )
+    if report.pretrade_checks:
+        checks_df = pd.DataFrame(report.pretrade_checks)
+        for column in ["delta", "adv_participation"]:
+            if column in checks_df.columns:
+                checks_df[column] = checks_df[column].map(
+                    lambda value: "" if pd.isna(value) else f"{float(value) * 100:.2f}%"
+                )
+        for column in ["trade_notional_usd", "adv_usd", "cost_usd"]:
+            if column in checks_df.columns:
+                checks_df[column] = checks_df[column].map(
+                    lambda value: "" if pd.isna(value) else f"${float(value):,.0f}"
+                )
+        if "total_cost_bps" in checks_df.columns:
+            checks_df["total_cost_bps"] = checks_df["total_cost_bps"].map(
+                lambda value: "" if pd.isna(value) else f"{float(value):.2f}"
+            )
+        st.dataframe(checks_df, use_container_width=True, hide_index=True)
+
     decided_count = sum(1 for item in report.recommendations if item.decision is not None)
     st.caption(f"Decision coverage: {decided_count}/{len(report.recommendations)}")
     recommendation_df = pd.DataFrame(
@@ -533,6 +564,14 @@ def show_weekly_advisor_section() -> None:
         ocol2.metric("Model Active Return", _format_pct(outcome_report.model_active_return))
         ocol3.metric("Decision Active Return", _format_pct(outcome_report.decision_active_return))
         ocol4.metric("Decision Alpha", _format_pct(outcome_report.decision_alpha))
+        scol1, scol2, scol3, scol4 = st.columns(4)
+        scol1.metric("Model Shortfall", _format_pct(outcome_report.model_implementation_shortfall))
+        scol2.metric("Decision Shortfall", _format_pct(outcome_report.decision_implementation_shortfall))
+        scol3.metric("Shortfall Gap", _format_pct(outcome_report.shortfall_gap))
+        scol4.metric(
+            "Decision vs Benchmark",
+            _format_pct(outcome_report.decision_vs_benchmark),
+        )
         st.caption(
             f"Follow hit rate: "
             f"{'N/A' if outcome_report.follow_hit_rate is None else f'{outcome_report.follow_hit_rate:.0%}'} | "
@@ -728,11 +767,12 @@ def show_portfolio_section(
     risk_report = target_portfolio.risk_report
     if risk_report is not None:
         st.subheader("Risk overlay")
-        rcol1, rcol2, rcol3, rcol4 = st.columns(4)
+        rcol1, rcol2, rcol3, rcol4, rcol5 = st.columns(5)
         rcol1.metric("Max position", _format_pct(risk_report.max_position_weight))
         rcol2.metric("Max sector", _format_pct(risk_report.max_sector_weight))
-        rcol3.metric("Turnover", _format_pct(risk_report.turnover))
-        rcol4.metric("Min ADV (USD)", f"{risk_report.min_adv_usd_in_portfolio:,.0f}" if risk_report.min_adv_usd_in_portfolio is not None else "N/A")
+        rcol3.metric("Max region", _format_pct(risk_report.max_region_weight))
+        rcol4.metric("Turnover", _format_pct(risk_report.turnover))
+        rcol5.metric("Min ADV (USD)", f"{risk_report.min_adv_usd_in_portfolio:,.0f}" if risk_report.min_adv_usd_in_portfolio is not None else "N/A")
         if risk_report.is_within_limits:
             st.success("Risk overlay checks passed.")
         else:

@@ -26,6 +26,7 @@ class PortfolioRiskReport:
     as_of_date: date
     max_position_weight: float
     max_sector_weight: float
+    max_region_weight: float
     turnover: float
     min_adv_usd_in_portfolio: float | None
     violations: List[RiskConstraintViolation] = field(default_factory=list)
@@ -57,6 +58,8 @@ class RebalanceInstruction:
     current_weight: float
     target_weight: float
     delta: float
+    policy_status: str = "pass"
+    policy_reason: str | None = None
 
 
 __all__ = [

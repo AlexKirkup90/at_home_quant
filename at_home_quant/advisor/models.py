@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Literal
 
@@ -43,6 +43,8 @@ class WeeklyAdvisorReport:
     recommendations: list[AdvisorRecommendationItem]
     watchlist: list[AdvisorWatchItem]
     experiment_id: int | None = None
+    pretrade_summary: dict = field(default_factory=dict)
+    pretrade_checks: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -71,6 +73,14 @@ class WeeklyOutcomeReport:
     decision_alpha: float
     follow_hit_rate: float | None
     ignored_positive_count: int
+    model_portfolio_return: float | None = None
+    decision_portfolio_return: float | None = None
+    benchmark_return: float | None = None
+    model_vs_benchmark: float | None = None
+    decision_vs_benchmark: float | None = None
+    model_implementation_shortfall: float = 0.0
+    decision_implementation_shortfall: float = 0.0
+    shortfall_gap: float = 0.0
 
 
 @dataclass
