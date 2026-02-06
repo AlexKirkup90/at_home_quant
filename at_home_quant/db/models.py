@@ -104,6 +104,7 @@ class WeeklyRecommendationBatch(Base):
     best_universe = Column(String, nullable=False)
     best_universe_score = Column(Float, nullable=False)
     status = Column(String, nullable=False, default="open", index=True)  # open|closed
+    data_snapshot_hash = Column(String, nullable=True, index=True)
     watchlist_json = Column(Text, nullable=False, default="[]")
 
 
@@ -133,6 +134,53 @@ class RecommendationDecision(Base):
     note = Column(Text, nullable=True)
 
 
+class BackendRun(Base):
+    __tablename__ = "backend_runs"
+
+    id = Column(Integer, primary_key=True)
+    started_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow, index=True)
+    finished_at = Column(DateTime, nullable=True, index=True)
+    status = Column(String, nullable=False, default="running", index=True)  # running|succeeded|failed
+    attempts = Column(Integer, nullable=False, default=1)
+    message = Column(Text, nullable=True)
+    data_snapshot_hash = Column(String, nullable=True, index=True)
+
+
+class DatasetSnapshot(Base):
+    __tablename__ = "dataset_snapshots"
+    __table_args__ = (
+        UniqueConstraint("layer", "snapshot_hash", name="uq_dataset_layer_hash"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow, index=True)
+    layer = Column(String, nullable=False, index=True)  # raw|clean|feature
+    as_of_date = Column(Date, nullable=False, index=True)
+    snapshot_hash = Column(String, nullable=False, index=True)
+    row_count = Column(Integer, nullable=False)
+    run_id = Column(Integer, ForeignKey("backend_runs.id"), nullable=True, index=True)
+
+
+class DataLayerPrice(Base):
+    __tablename__ = "data_layer_prices"
+    __table_args__ = (
+        UniqueConstraint("snapshot_id", "ticker_id", "date", name="uq_layer_price_snapshot_ticker_date"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    snapshot_id = Column(Integer, ForeignKey("dataset_snapshots.id"), nullable=False, index=True)
+    ticker_id = Column(Integer, ForeignKey("tickers.id"), nullable=False, index=True)
+    date = Column(Date, nullable=False, index=True)
+    open = Column(Float, nullable=True)
+    high = Column(Float, nullable=True)
+    low = Column(Float, nullable=True)
+    close = Column(Float, nullable=True)
+    adj_close = Column(Float, nullable=False)
+    volume = Column(Float, nullable=True)
+    return_ = Column(Float, nullable=True)
+    layer = Column(String, nullable=False, index=True)
+
+
 __all__ = [
     "Base",
     "Ticker",
@@ -144,4 +192,7 @@ __all__ = [
     "WeeklyRecommendationBatch",
     "WeeklyRecommendationItem",
     "RecommendationDecision",
+    "BackendRun",
+    "DatasetSnapshot",
+    "DataLayerPrice",
 ]

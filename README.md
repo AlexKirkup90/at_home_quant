@@ -196,3 +196,18 @@ python -m at_home_quant.scripts.run_weekly_cycle
 ```
 
 This runs daily data sync and generates a fresh weekly recommendation batch using the latest available price date.
+
+## Backend Pipeline (Phase 1)
+
+Phase 1 now includes a one-click backend orchestrator (`Run Backend` in the Weekly Advisor tab) and a matching CLI flow:
+
+```bash
+python -m at_home_quant.scripts.run_weekly_cycle
+```
+
+This pipeline performs:
+
+1. ETL sync with retry/failure state tracking (`backend_runs` table).
+2. Versioned dataset snapshots for `raw`, `clean`, and `feature` layers (`dataset_snapshots` + `data_layer_prices`).
+3. Data quality gating (missingness, staleness, return outliers, adjustment-ratio sanity).
+4. Weekly recommendation generation linked to immutable `data_snapshot_hash`.

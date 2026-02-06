@@ -27,6 +27,7 @@ else:
     STREAMLIT_IMPORT_ERROR = None
 
 from at_home_quant.config.settings import get_settings
+from at_home_quant.backend.service import run_backend_pipeline
 from at_home_quant.advisor.models import WorkflowDecisionInput
 from at_home_quant.advisor.service import (
     generate_weekly_recommendation,
@@ -263,6 +264,27 @@ def show_weekly_advisor_section() -> None:
         max_value=latest_price_date,
         key="weekly_review_date",
     )
+
+    st.subheader("Run Backend (One Click)")
+    st.caption(
+        "Runs ETL sync, data quality gate, versioned raw/clean/feature snapshots, and weekly recommendation generation."
+    )
+    if st.button("Run Backend", key="weekly_run_backend"):
+        with st.spinner("Running backend pipeline..."):
+            try:
+                result = run_backend_pipeline(
+                    as_of_date=as_of_date,
+                    include_weekly_recommendation=True,
+                    retries=2,
+                )
+                st.success(
+                    f"Backend run {result.run_id} succeeded for {result.as_of_date.isoformat()}."
+                )
+                st.caption(
+                    f"snapshot={result.data_snapshot_hash} | recommendation_batch={result.recommendation_batch_id}"
+                )
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Backend run failed: {exc}")
 
     st.subheader("Step 1 — Sync Data")
     if st.button("Step 1: Sync Data (Daily Update)", key="weekly_step1"):

@@ -77,9 +77,26 @@ SECTOR_BY_SYMBOL: Dict[str, str] = {
     "BVIC.L": "Consumer Staples",
 }
 
+SYMBOL_EQUIVALENCE_GROUPS: Dict[str, set[str]] = {
+    "GLD": {"GLD", "IAU", "SGLN"},
+    "BIL": {"BIL", "VAGS", "SGOV", "SHY", "AGG", "BND"},
+}
+
 
 def sector_for_symbol(symbol: str) -> str:
     return SECTOR_BY_SYMBOL.get(symbol, f"UNKNOWN:{symbol}")
+
+
+def canonical_symbol(symbol: str) -> str:
+    for canonical, group in SYMBOL_EQUIVALENCE_GROUPS.items():
+        if symbol in group:
+            return canonical
+    return symbol
+
+
+def equivalent_symbols(symbol: str) -> set[str]:
+    canonical = canonical_symbol(symbol)
+    return SYMBOL_EQUIVALENCE_GROUPS.get(canonical, {canonical})
 
 
 def list_all_symbols() -> list[str]:
@@ -101,7 +118,10 @@ __all__ = [
     "ALL_TICKERS",
     "UNIVERSE_BENCHMARK_SYMBOL",
     "SECTOR_BY_SYMBOL",
+    "SYMBOL_EQUIVALENCE_GROUPS",
     "sector_for_symbol",
+    "canonical_symbol",
+    "equivalent_symbols",
     "list_all_symbols",
     "iter_universe",
 ]

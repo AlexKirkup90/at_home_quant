@@ -16,7 +16,7 @@ from at_home_quant.advisor.models import (
     WorkflowDecisionInput,
 )
 from at_home_quant.config.settings import get_settings
-from at_home_quant.data.tickers import TickerInfo, TickerType
+from at_home_quant.data.tickers import TickerInfo, TickerType, canonical_symbol, equivalent_symbols
 from at_home_quant.db import crud
 from at_home_quant.db.models import (
     AdvisorPortfolioSnapshot,
@@ -31,12 +31,6 @@ from at_home_quant.portfolio.rebalance import diff_portfolios
 from at_home_quant.portfolio.service import build_monthly_portfolio
 from at_home_quant.regime.service import get_current_regime
 from at_home_quant.selection.service import rank_universe
-
-
-EQUIVALENT_GROUPS: dict[str, set[str]] = {
-    "GLD": {"GLD", "IAU", "SGLN"},
-    "BIL": {"BIL", "VAGS", "SGOV", "SHY", "AGG", "BND"},
-}
 
 
 def _serialize_positions(positions: list[TargetPosition]) -> str:
@@ -153,17 +147,10 @@ def _action_rationale(reason_tag: str, action: str, delta: float, gate_floor: fl
     return f"[{tag}] No trade: move is below actionable gate ({gate_floor:.2%})."
 
 
-def _canonical_symbol(symbol: str) -> str:
-    for canonical, group in EQUIVALENT_GROUPS.items():
-        if symbol in group:
-            return canonical
-    return symbol
-
-
 def _preferred_symbol_for_canonical(canonical: str, current_positions: Iterable[TargetPosition]) -> str:
     best_symbol = canonical
     best_weight = -1.0
-    group = EQUIVALENT_GROUPS.get(canonical, {canonical})
+    group = equivalent_symbols(canonical)
     for position in current_positions:
         if position.ticker in group and position.weight > best_weight:
             best_symbol = position.ticker
@@ -175,7 +162,7 @@ def _remap_equivalent_symbols(target: TargetPortfolio, current: TargetPortfolio)
     weights: dict[str, float] = {}
     asset_type_by_symbol: dict[str, str] = {}
     for position in target.positions:
-        canonical = _canonical_symbol(position.ticker)
+        canonical = canonical_symbol(position.ticker)
         preferred = _preferred_symbol_for_canonical(canonical, current.positions)
         weights[preferred] = weights.get(preferred, 0.0) + position.weight
         asset_type_by_symbol[preferred] = position.asset_type
@@ -287,7 +274,7 @@ def _trade_gate_floor(settings) -> float:
 
 
 def _reason_tag(ticker: str, action: str, respect_current_book: bool) -> str:
-    canonical = _canonical_symbol(ticker)
+    canonical = canonical_symbol(ticker)
     if canonical in {"GLD", "BIL"}:
         return "risk"
     if action in {"buy", "sell"} and not respect_current_book:
@@ -324,6 +311,7 @@ def generate_weekly_recommendation(
     as_of_date: datetime.date,
     top_n: int = 15,
     threshold: float = 0.005,
+    data_snapshot_hash: str | None = None,
     session: Session | None = None,
 ) -> WeeklyAdvisorReport:
     def _generate(session_obj: Session) -> WeeklyAdvisorReport:
@@ -375,6 +363,7 @@ def generate_weekly_recommendation(
             best_universe=regime.best_universe,
             best_universe_score=regime.best_universe_score,
             status="open",
+            data_snapshot_hash=data_snapshot_hash,
             watchlist_json="[]",
         )
         session_obj.add(batch)
