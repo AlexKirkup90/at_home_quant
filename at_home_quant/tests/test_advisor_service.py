@@ -1,6 +1,7 @@
 import datetime
 
 import pandas as pd
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
@@ -13,7 +14,7 @@ from at_home_quant.advisor.service import (
     save_advisor_portfolio_snapshot,
     save_executed_from_decisions,
 )
-from at_home_quant.data.tickers import BENCHMARKS, SAMPLE_NASDAQ100, TickerInfo
+from at_home_quant.data.tickers import BENCHMARKS, SAMPLE_NASDAQ100, TickerInfo, TickerType
 from at_home_quant.db.models import Base, PriceDaily, Ticker
 from at_home_quant.portfolio.models import TargetPosition
 
@@ -38,6 +39,17 @@ def _seed_prices(session: Session, as_of_date: datetime.date, periods: int = 420
         ticker_ids[symbol] = _add_ticker(session, BENCHMARKS[symbol])
     for info in SAMPLE_NASDAQ100.values():
         ticker_ids[info.symbol] = _add_ticker(session, info)
+    for symbol in ["SGLN", "VAGS", "VHYL", "VUSA"]:
+        ticker_ids[symbol] = _add_ticker(
+            session,
+            TickerInfo(
+                symbol=symbol,
+                name=symbol,
+                asset_type=TickerType.EQUITY,
+                universe=None,
+                currency="USD",
+            ),
+        )
 
     dates = pd.bdate_range(end=as_of_date, periods=periods)
     slopes = {
@@ -46,6 +58,10 @@ def _seed_prices(session: Session, as_of_date: datetime.date, periods: int = 420
         "VMID": 0.05,
         "GLD": 0.03,
         "BIL": 0.00,
+        "SGLN": 0.03,
+        "VAGS": 0.00,
+        "VHYL": 0.11,
+        "VUSA": 0.10,
         "AAPL": 0.24,
         "MSFT": 0.20,
     }
@@ -111,3 +127,35 @@ def test_weekly_advisor_flow_end_to_end():
             session=session,
         )
         assert latest_executed is not None
+
+
+def test_weekly_recommendation_applies_equivalence_and_trade_gating(monkeypatch):
+    monkeypatch.setenv("RESPECT_CURRENT_BOOK_MODE", "true")
+    monkeypatch.setenv("MIN_TRADE_DELTA_PCT", "5.0")
+    monkeypatch.setenv("WEIGHT_ROUNDING_PCT", "1.0")
+    monkeypatch.setenv("ENABLE_TRADE_GATING", "true")
+    engine = create_engine("sqlite:///:memory:")
+    as_of = datetime.date(2025, 2, 28)
+    with Session(engine) as session:
+        _seed_prices(session, as_of)
+        positions = [
+            TargetPosition("VHYL", 0.22, "equity"),
+            TargetPosition("VUSA", 0.24, "equity"),
+            TargetPosition("SGLN", 0.14, "gold"),
+            TargetPosition("VAGS", 0.40, "cash"),
+        ]
+        save_advisor_portfolio_snapshot(as_of_date=as_of, positions=positions, snapshot_type="baseline", session=session)
+        save_advisor_portfolio_snapshot(as_of_date=as_of, positions=positions, snapshot_type="executed", session=session)
+
+        report = generate_weekly_recommendation(as_of_date=as_of, top_n=2, session=session)
+        by_ticker = {item.ticker: item for item in report.recommendations}
+        # Equivalent mapping should keep user sleeve tickers instead of forcing GLD/BIL.
+        assert "GLD" not in by_ticker
+        assert "BIL" not in by_ticker
+        assert "SGLN" in by_ticker
+        assert "VAGS" in by_ticker
+        # Practical trade gate should suppress small moves.
+        small_moves = [item for item in report.recommendations if abs(item.delta) < 0.05]
+        assert small_moves
+        assert all(item.recommendation == "hold" for item in small_moves)
+        assert all(item.rationale.startswith("[") for item in report.recommendations)

@@ -41,6 +41,10 @@ Data mode and health-gate controls:
 - `RISK_MAX_TURNOVER=0.35` (max monthly turnover allowed by the risk overlay).
 - `RISK_MIN_ADV_USD=5000000` (minimum average daily dollar volume for equity eligibility).
 - `RISK_ADV_LOOKBACK_DAYS=20` (ADV lookback window in business days).
+- `RESPECT_CURRENT_BOOK_MODE=true` (preserve current holdings and apply model tilts to sleeves instead of full reconstruction).
+- `MIN_TRADE_DELTA_PCT=5.0` (minimum absolute trade size before emitting buy/sell recommendations).
+- `WEIGHT_ROUNDING_PCT=1.0` (round target weights to practical increments).
+- `ENABLE_TRADE_GATING=true` (cost-aware gate to suppress low-signal over-trading).
 
 3. **Run the initial historical ETL**
 

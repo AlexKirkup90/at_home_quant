@@ -351,6 +351,11 @@ def show_weekly_advisor_section() -> None:
             for item in report.recommendations
         ]
     )
+    for column in ["current_weight", "target_weight", "delta", "executed_weight"]:
+        if column in recommendation_df.columns:
+            recommendation_df[column] = recommendation_df[column].map(
+                lambda value: "" if pd.isna(value) else f"{float(value) * 100:.2f}%"
+            )
     st.dataframe(recommendation_df, use_container_width=True, hide_index=True)
 
     with st.expander("Log Decisions"):

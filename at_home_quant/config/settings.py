@@ -61,6 +61,22 @@ class Settings(BaseSettings):
         20,
         description="Lookback window (business days) for average daily dollar volume estimation.",
     )
+    respect_current_book_mode: bool = Field(
+        True,
+        description="If true, weekly recommendations preserve current holdings and apply model tilts to sleeves.",
+    )
+    min_trade_delta_pct: float = Field(
+        5.0,
+        description="Minimum absolute trade size (%) required to emit a buy/sell recommendation.",
+    )
+    weight_rounding_pct: float = Field(
+        1.0,
+        description="Rounding increment (%) for target weights before recommendation generation.",
+    )
+    enable_trade_gating: bool = Field(
+        True,
+        description="If true, suppresses low-signal trades using min-size and cost-aware gates.",
+    )
     benchmark_tickers: List[str] = Field(
         default_factory=lambda: ["QQQ", "SPY", "VMID", "GLD", "IAU", "BIL"],
         description="Default benchmark/asset tickers to fetch",
