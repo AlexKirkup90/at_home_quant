@@ -174,3 +174,58 @@ def test_run_backend_pipeline_persists_layer_prices_with_small_insert_batches(mo
     with Session(engine) as session:
         row_count = session.query(DataLayerPrice).count()
     assert row_count > 0
+
+
+def test_run_backend_pipeline_preserves_root_error_when_experiment_finalize_fails(monkeypatch):
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    as_of_date = datetime.date(2025, 2, 28)
+    with Session(engine) as session:
+        _seed_prices(session, as_of_date)
+
+    def session_override():
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _ctx():
+            with Session(engine) as session:
+                try:
+                    yield session
+                    session.commit()
+                except Exception:
+                    session.rollback()
+                    raise
+
+        return _ctx()
+
+    class _Experiment:
+        id = 4
+
+    monkeypatch.setattr(backend_service_module, "get_session", session_override)
+    monkeypatch.setattr(backend_service_module, "init_db", lambda: None)
+    monkeypatch.setattr(backend_service_module, "run_daily_update", lambda: None)
+    monkeypatch.setattr(backend_service_module, "run_fundamentals_update", lambda **_kwargs: 0)
+    monkeypatch.setattr(backend_service_module, "register_experiment", lambda **_kwargs: _Experiment())
+    monkeypatch.setattr(
+        backend_service_module,
+        "generate_weekly_recommendation",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("root cause failure")),
+    )
+    monkeypatch.setattr(
+        backend_service_module,
+        "complete_experiment",
+        lambda **_kwargs: (_ for _ in ()).throw(ValueError("Experiment 4 not found.")),
+    )
+
+    try:
+        backend_service_module.run_backend_pipeline(
+            as_of_date=as_of_date,
+            include_weekly_recommendation=True,
+            retries=0,
+        )
+        assert False, "Expected backend pipeline to raise root cause error."
+    except RuntimeError as exc:
+        assert "root cause failure" in str(exc)

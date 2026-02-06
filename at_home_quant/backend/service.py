@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 import hashlib
 import json
+import logging
 
 import pandas as pd
 from sqlalchemy import func, select
@@ -23,6 +24,7 @@ from at_home_quant.research.registry import complete_experiment, register_experi
 
 
 SQLITE_SAFE_INSERT_BATCH_SIZE = 75
+LOGGER = logging.getLogger(__name__)
 
 
 def _load_prices_df(session: Session, as_of_date: datetime.date) -> pd.DataFrame:
@@ -276,15 +278,22 @@ def run_backend_pipeline(
         except Exception as exc:  # noqa: BLE001
             last_error = exc
             if attempt_experiment_id is not None:
-                with get_session() as session:
-                    complete_experiment(
-                        session=session,
-                        experiment_id=attempt_experiment_id,
-                        status="failed",
-                        metrics={},
-                        challenger_comparison={},
-                        robustness_checks={},
-                        error_message=str(exc),
+                try:
+                    with get_session() as session:
+                        complete_experiment(
+                            session=session,
+                            experiment_id=attempt_experiment_id,
+                            status="failed",
+                            metrics={},
+                            challenger_comparison={},
+                            robustness_checks={},
+                            error_message=str(exc),
+                        )
+                except Exception as completion_exc:  # noqa: BLE001
+                    LOGGER.warning(
+                        "Unable to mark experiment %s as failed after backend error: %s",
+                        attempt_experiment_id,
+                        completion_exc,
                     )
             if attempt <= retries:
                 continue
@@ -295,15 +304,22 @@ def run_backend_pipeline(
         run.finished_at = datetime.datetime.utcnow()
         run.message = str(last_error) if last_error else "Unknown backend pipeline failure."
         if experiment_id is not None:
-            complete_experiment(
-                session=session,
-                experiment_id=experiment_id,
-                status="failed",
-                metrics={},
-                challenger_comparison={},
-                robustness_checks={},
-                error_message=(str(last_error) if last_error else "Unknown backend pipeline failure."),
-            )
+            try:
+                complete_experiment(
+                    session=session,
+                    experiment_id=experiment_id,
+                    status="failed",
+                    metrics={},
+                    challenger_comparison={},
+                    robustness_checks={},
+                    error_message=(str(last_error) if last_error else "Unknown backend pipeline failure."),
+                )
+            except Exception as completion_exc:  # noqa: BLE001
+                LOGGER.warning(
+                    "Unable to mark experiment %s as failed in finalization: %s",
+                    experiment_id,
+                    completion_exc,
+                )
     if last_error is not None:
         raise last_error
     raise RuntimeError("Backend pipeline failed without exception detail.")
