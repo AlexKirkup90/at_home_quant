@@ -60,7 +60,7 @@ def main() -> None:
 
     print("Monthly Performance")
     print(
-        f"{'Start':<12} {'End':<12} {'Gross':>9} {'Cost':>8} {'Net':>9} "
+        f"{'Start':<12} {'End':<12} {'Gross':>9} {'Turnover':>10} {'Cost':>8} {'Net':>9} "
         f"{'Benchmark':>10} {'Bench Ret':>10} {'Alpha':>10}"
     )
     for item in monthly:
@@ -69,6 +69,7 @@ def main() -> None:
         print(
             f"{item.period_start} {item.period_end} "
             f"{_format_pct(gross_return):>9} "
+            f"{_format_pct(item.portfolio_turnover):>10} "
             f"{_format_pct(item.transaction_cost):>8} "
             f"{_format_pct(item.portfolio_return):>9} {item.benchmark_name:>10} "
             f"{_format_pct(item.benchmark_return):>10} {highlight}{_format_pct(item.alpha):>9}"
@@ -77,13 +78,25 @@ def main() -> None:
     print("\nSummary")
     print(f"Start Date:       {summary.start_date}")
     print(f"End Date:         {summary.end_date}")
+    print(f"Gross Return:     {_format_pct(summary.gross_total_return)}")
     print(f"Total Return:     {_format_pct(summary.total_return)}")
+    print(f"Total Cost Drag:  {_format_pct(summary.total_transaction_cost)}")
     print(f"CAGR:             {_format_pct(summary.cagr)}")
     print(f"Volatility:       {_format_pct(summary.volatility) if summary.volatility is not None else 'N/A'}")
     print(f"Max Drawdown:     {_format_pct(summary.max_drawdown)}")
     print(f"Sharpe:           {summary.sharpe:.2f}" if summary.sharpe is not None else "Sharpe:           N/A")
+    print(
+        f"Tracking Error:   {_format_pct(summary.tracking_error) if summary.tracking_error is not None else 'N/A'}"
+    )
+    print(
+        f"Information Ratio:{summary.information_ratio:.2f}"
+        if summary.information_ratio is not None
+        else "Information Ratio:N/A"
+    )
     print(f"Total Alpha:      {_format_pct(summary.total_alpha)}")
     print(f"Avg Monthly Alpha:{_format_pct(summary.avg_monthly_alpha)}")
+    print(f"Alpha Hit Rate:   {summary.positive_alpha_months}/{summary.months} ({_format_pct(summary.alpha_hit_rate)})")
+    print(f"Avg Turnover:     {_format_pct(summary.avg_monthly_turnover)}")
 
     if args.csv_path:
         with open(args.csv_path, "w", newline="") as f:

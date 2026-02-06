@@ -91,5 +91,9 @@ def test_get_monthly_performance_end_to_end(session: Session):
     assert performances[0].benchmark_name == "QQQ"
 
     summary = get_performance_summary(session=session, regime_getter=stub_regime)
+    assert summary.gross_total_return == pytest.approx(summary.total_return)
+    assert summary.total_transaction_cost == pytest.approx(0.0)
     assert summary.total_alpha == pytest.approx(0.01)
     assert summary.avg_monthly_alpha == pytest.approx(0.01)
+    assert summary.positive_alpha_months == 1
+    assert summary.alpha_hit_rate == pytest.approx(1.0)

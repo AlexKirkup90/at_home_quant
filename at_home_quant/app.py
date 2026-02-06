@@ -31,7 +31,8 @@ from at_home_quant.data.health import get_data_health_report
 from at_home_quant.db.models import PortfolioSnapshot, PriceDaily
 from at_home_quant.db.session import get_session
 from at_home_quant.performance.models import MonthlyPerformance, PerformanceSummary
-from at_home_quant.performance.service import get_monthly_performance, get_performance_summary
+from at_home_quant.performance.stats import compute_performance_summary
+from at_home_quant.performance.service import get_monthly_performance
 from at_home_quant.portfolio.models import RebalanceInstruction, TargetPortfolio
 from at_home_quant.portfolio.service import build_monthly_portfolio, compute_rebalance
 from at_home_quant.regime.models import RegimeDecision, UniverseScore
@@ -86,6 +87,12 @@ def performance_to_dataframe(performance: Iterable[MonthlyPerformance]) -> pd.Da
 
 def summary_to_dataframe(summary: PerformanceSummary) -> pd.DataFrame:
     return pd.DataFrame([asdict(summary)])
+
+
+def _format_pct(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    return f"{value * 100:.2f}%"
 
 
 def require_streamlit() -> None:
@@ -293,10 +300,36 @@ def show_performance_section() -> None:
     require_streamlit()
     st.header("Performance & Alpha")
     settings = get_settings()
+    timing_options = ["period_start", "period_end"]
+    default_timing_index = timing_options.index(settings.benchmark_selection_timing)
+    col1, col2, col3 = st.columns(3)
+    benchmark_timing = col1.selectbox(
+        "Benchmark timing",
+        options=timing_options,
+        index=default_timing_index,
+        help="Choose whether benchmark universe selection happens at the start or end of each period.",
+    )
+    transaction_cost_bps = col2.number_input(
+        "Transaction cost (bps)",
+        min_value=0.0,
+        max_value=100.0,
+        value=float(settings.transaction_cost_bps),
+        step=0.5,
+    )
+    slippage_bps = col3.number_input(
+        "Slippage (bps)",
+        min_value=0.0,
+        max_value=100.0,
+        value=float(settings.slippage_bps),
+        step=0.5,
+    )
 
     try:
-        monthly = get_monthly_performance()
-        summary = get_performance_summary()
+        monthly = get_monthly_performance(
+            benchmark_timing=benchmark_timing,
+            transaction_cost_bps=transaction_cost_bps,
+            slippage_bps=slippage_bps,
+        )
     except OperationalError:
         st.info(
             "Performance data is unavailable. Build portfolios and run performance calculation first."
@@ -309,16 +342,37 @@ def show_performance_section() -> None:
 
     st.caption(
         "Assumptions: "
-        f"benchmark timing={settings.benchmark_selection_timing}, "
-        f"transaction cost={settings.transaction_cost_bps:.2f}bps, "
-        f"slippage={settings.slippage_bps:.2f}bps."
+        f"benchmark timing={benchmark_timing}, "
+        f"transaction cost={transaction_cost_bps:.2f}bps, "
+        f"slippage={slippage_bps:.2f}bps."
     )
 
-    st.subheader("Monthly performance")
     monthly_df = performance_to_dataframe(monthly)
     if monthly_df.empty:
         st.info("No performance history available yet. Run at least one monthly portfolio cycle first.")
         return
+    summary = compute_performance_summary(monthly)
+
+    st.subheader("Key metrics")
+    kpi_col1, kpi_col2, kpi_col3, kpi_col4 = st.columns(4)
+    kpi_col1.metric("Net total return", _format_pct(summary.total_return))
+    kpi_col2.metric("Gross total return", _format_pct(summary.gross_total_return))
+    kpi_col3.metric("Total cost drag", _format_pct(summary.total_transaction_cost))
+    kpi_col4.metric(
+        "Alpha hit rate",
+        f"{summary.positive_alpha_months}/{summary.months} ({_format_pct(summary.alpha_hit_rate)})",
+    )
+
+    risk_col1, risk_col2, risk_col3, risk_col4 = st.columns(4)
+    risk_col1.metric("CAGR", _format_pct(summary.cagr))
+    risk_col2.metric("Volatility", _format_pct(summary.volatility))
+    risk_col3.metric("Max drawdown", _format_pct(summary.max_drawdown))
+    risk_col4.metric(
+        "Information ratio",
+        f"{summary.information_ratio:.2f}" if summary.information_ratio is not None else "N/A",
+    )
+
+    st.subheader("Monthly performance")
     st.dataframe(monthly_df, use_container_width=True)
 
     st.subheader("Summary stats")
@@ -327,10 +381,21 @@ def show_performance_section() -> None:
 
     if not monthly_df.empty:
         st.subheader("Equity curve vs benchmark")
-        perf_chart = monthly_df[["portfolio_return", "benchmark_return"]].copy()
-        perf_chart["portfolio_equity"] = (1 + perf_chart["portfolio_return"]).cumprod()
+        perf_chart = monthly_df[
+            ["portfolio_return", "portfolio_return_gross", "benchmark_return"]
+        ].copy()
+        perf_chart["portfolio_equity_net"] = (1 + perf_chart["portfolio_return"]).cumprod()
+        perf_chart["portfolio_equity_gross"] = (
+            1 + perf_chart["portfolio_return_gross"].fillna(perf_chart["portfolio_return"])
+        ).cumprod()
         perf_chart["benchmark_equity"] = (1 + perf_chart["benchmark_return"]).cumprod()
-        st.line_chart(perf_chart[["portfolio_equity", "benchmark_equity"]])
+        perf_chart.index = monthly_df["period_end"]
+        st.line_chart(perf_chart[["portfolio_equity_net", "portfolio_equity_gross", "benchmark_equity"]])
+
+        st.subheader("Turnover & implementation cost")
+        turnover_cost = monthly_df[["portfolio_turnover", "transaction_cost"]].copy()
+        turnover_cost.index = monthly_df["period_end"]
+        st.line_chart(turnover_cost)
 
         st.subheader("Alpha over time")
         st.bar_chart(monthly_df.set_index("period_end")["alpha"])

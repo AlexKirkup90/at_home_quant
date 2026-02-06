@@ -117,6 +117,7 @@ Phase 5 measures how the constructed portfolio performs versus the best-scoring 
 - The benchmark for each month is chosen from NASDAQ100 (QQQ), S&P500 (SPY), or FTSE250 (VMID) using configurable timing (`BENCHMARK_SELECTION_TIMING=period_start|period_end`).
 - Portfolio returns include configurable implementation costs based on turnover (`TRANSACTION_COST_BPS` + `SLIPPAGE_BPS`).
 - Alpha is defined as `portfolio_return(net) - benchmark_return` per month, with aggregates including CAGR, volatility, max drawdown, Sharpe, and cumulative alpha.
+- Summary diagnostics also include gross return, total cost drag, tracking error, information ratio, alpha hit rate, and average monthly turnover.
 - CLI helper:
 
 ```bash
@@ -146,4 +147,4 @@ The dashboard is organized into four sections:
 - **Regime & Universe Overview** – select a date to view the best universe, composite scores, and suggested equity exposure band.
 - **Current Portfolio & Rebalance** – build the monthly target portfolio, see sleeve weights, and view buy/sell/hold instructions for the selected date.
 - **Stock Ranking (Equity Sleeve Detail)** – choose a universe, date, and Top-N cutoff to inspect factor scores for the leading stocks.
-- **Performance & Alpha** – review monthly returns versus the benchmark-of-the-month and summary stats including CAGR, volatility, max drawdown, Sharpe, and cumulative alpha.
+- **Performance & Alpha** – tune benchmark timing and implementation cost assumptions, then review monthly net/gross returns, turnover/cost history, and summary diagnostics (including tracking error and information ratio).
