@@ -43,11 +43,12 @@ def _deserialize_positions(data: list[dict]) -> list[TargetPosition]:
 
 def _save_snapshot(session: Session, portfolio: TargetPortfolio) -> None:
     Base.metadata.create_all(bind=session.bind)
-    existing = session.execute(
+    existing_rows = session.execute(
         select(PortfolioSnapshot).where(PortfolioSnapshot.as_of_date == portfolio.as_of_date)
-    ).scalar_one_or_none()
-    if existing:
-        session.delete(existing)
+    ).scalars().all()
+    if existing_rows:
+        for existing in existing_rows:
+            session.delete(existing)
         session.flush()
     snapshot = PortfolioSnapshot(
         as_of_date=portfolio.as_of_date,
@@ -65,8 +66,8 @@ def _load_last_snapshot(session: Session, before_date: datetime.date | None = No
     if before_date is not None:
         stmt = stmt.where(PortfolioSnapshot.as_of_date < before_date)
     row = session.execute(
-        stmt.order_by(PortfolioSnapshot.as_of_date.desc())
-    ).scalar_one_or_none()
+        stmt.order_by(PortfolioSnapshot.as_of_date.desc()).limit(1)
+    ).scalars().first()
     if row is None:
         return None
     positions = _deserialize_positions(json.loads(row.positions_json))

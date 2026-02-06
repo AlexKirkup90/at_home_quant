@@ -137,3 +137,16 @@ def test_save_manual_portfolio_snapshot_persists_anchor():
         saved_positions = json.loads(saved.positions_json)
         assert len(saved_positions) == 3
         assert saved_positions[0]["ticker"] == "VUSA"
+
+
+def test_compute_rebalance_uses_latest_prior_snapshot_when_multiple_exist():
+    as_of_first = datetime.date(2024, 12, 31)
+    as_of_mid = datetime.date(2025, 1, 15)
+    as_of_second = datetime.date(2025, 1, 31)
+    engine = create_engine("sqlite:///:memory:")
+    with Session(engine) as session:
+        _seed_prices(session, as_of_second)
+        build_monthly_portfolio(as_of_first, session=session)
+        build_monthly_portfolio(as_of_mid, session=session)
+        instructions = compute_rebalance(as_of_second, session=session)
+        assert instructions
