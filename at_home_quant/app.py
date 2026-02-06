@@ -43,36 +43,22 @@ from at_home_quant.etl.daily_update import run_daily_update
 
 def get_latest_price_date() -> Optional[datetime.date]:
     """Return the most recent price date in the database."""
-    session = get_session()
-    if session is None:
-        return None
     try:
-        return session.execute(select(func.max(PriceDaily.date))).scalar_one_or_none()
-    except (OperationalError, SQLAlchemyError, AttributeError) as exc:
+        with get_session() as session:
+            return session.execute(select(func.max(PriceDaily.date))).scalar_one_or_none()
+    except (OperationalError, SQLAlchemyError) as exc:
         logging.getLogger(__name__).warning("get_latest_price_date failed: %s", exc)
         return None
-    finally:
-        try:
-            session.close()
-        except AttributeError:
-            pass
 
 
 def get_snapshot_dates() -> list[datetime.date]:
     """Return all available portfolio snapshot dates (descending)."""
-    session = get_session()
-    if session is None:
-        return []
     try:
-        dates = session.execute(select(PortfolioSnapshot.as_of_date)).scalars().all()
-    except (OperationalError, SQLAlchemyError, AttributeError) as exc:
+        with get_session() as session:
+            dates = session.execute(select(PortfolioSnapshot.as_of_date)).scalars().all()
+    except (OperationalError, SQLAlchemyError) as exc:
         logging.getLogger(__name__).warning("get_snapshot_dates failed: %s", exc)
         return []
-    finally:
-        try:
-            session.close()
-        except AttributeError:
-            pass
     return sorted(dates, reverse=True)
 
 
@@ -158,38 +144,60 @@ def show_portfolio_section() -> None:
     require_streamlit()
     st.header("Current Portfolio & Rebalance")
 
-    snapshot_dates = get_snapshot_dates()
-    if not snapshot_dates:
+    latest_price_date = get_latest_price_date()
+    if latest_price_date is None:
         st.warning(
-            "No portfolio snapshots found. "
-            "Run the historical ETL and then generate a portfolio in this environment "
-            "before using the portfolio/rebalance view."
+            "No price data found in the database. "
+            "Run the ETL / data load scripts before using the portfolio view."
         )
         return
 
-    latest_price_date = get_latest_price_date()
-    default_date = snapshot_dates[0] if snapshot_dates else latest_price_date
-    selected_date = st.date_input("Portfolio as-of date", value=default_date, max_value=default_date)
+    snapshot_dates = get_snapshot_dates()
+    if snapshot_dates:
+        st.caption(f"Latest saved snapshot: {snapshot_dates[0].isoformat()} ({len(snapshot_dates)} total)")
+    else:
+        st.info("No portfolio snapshots yet. Build and save an initial target portfolio to bootstrap rebalancing.")
+
+    selected_date = st.date_input("Portfolio as-of date", value=latest_price_date, max_value=latest_price_date)
+    top_n = st.slider("Top N equities", min_value=1, max_value=50, value=15, key="portfolio_top_n")
     threshold = st.slider("Rebalance threshold (%)", min_value=0.0, max_value=5.0, value=0.5, step=0.1) / 100
 
     try:
-        target_portfolio = build_monthly_portfolio(selected_date)
+        target_portfolio = build_monthly_portfolio(
+            selected_date,
+            top_n=top_n,
+            persist_snapshot=False,
+        )
     except Exception as exc:  # noqa: BLE001
-        st.warning("Unable to build target portfolio for the selected date.")
+        st.warning("Unable to build target portfolio preview for the selected date.")
         st.caption(str(exc))
         return
 
-    st.subheader("Target portfolio")
+    st.subheader("Target portfolio preview")
     portfolio_df = portfolio_to_dataframe(target_portfolio)
     st.dataframe(portfolio_df, use_container_width=True)
 
-    st.subheader("Rebalance instructions")
+    if st.button("Save Target Snapshot"):
+        with st.spinner("Saving target snapshot..."):
+            try:
+                build_monthly_portfolio(selected_date, top_n=top_n, persist_snapshot=True)
+                st.success(f"Saved portfolio snapshot for {selected_date.isoformat()}.")
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Unable to save portfolio snapshot: {exc}")
+
+    st.subheader("Rebalance instructions (read-only)")
     try:
-        instructions = compute_rebalance(selected_date, threshold=threshold)
+        instructions = compute_rebalance(selected_date, threshold=threshold, top_n=top_n)
         rebalance_df = rebalance_to_dataframe(instructions)
         st.dataframe(rebalance_df, use_container_width=True)
+    except ValueError as exc:
+        st.info(
+            "No rebalance instructions available yet. "
+            "Save a snapshot for an earlier date before rebalancing this date."
+        )
+        st.caption(str(exc))
     except Exception as exc:  # noqa: BLE001
-        st.info("No rebalance instructions available. Build at least one prior snapshot first.")
+        st.info("No rebalance instructions available.")
         st.caption(str(exc))
 
 

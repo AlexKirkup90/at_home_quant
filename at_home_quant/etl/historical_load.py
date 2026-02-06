@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import datetime
 from typing import Sequence
 
@@ -23,10 +25,18 @@ def normalize_yfinance_prices(df: pd.DataFrame, symbol: str | None = None) -> pd
         return df
 
     if isinstance(df.columns, pd.MultiIndex):
-        stacked = df.stack(level=-1).rename_axis(["date", "symbol"]).reset_index()
+        field_names = {"Open", "High", "Low", "Close", "Adj Close", "Volume"}
+        level_0 = set(df.columns.get_level_values(0))
+        level_1 = set(df.columns.get_level_values(1))
+        stack_level = 0 if field_names.intersection(level_1) else 1 if field_names.intersection(level_0) else 0
+        try:
+            stacked = df.stack(level=stack_level, future_stack=True).rename_axis(["date", "symbol"]).reset_index()
+        except TypeError:  # pandas<2.1
+            stacked = df.stack(level=stack_level).rename_axis(["date", "symbol"]).reset_index()
     else:
-        stacked = df.reset_index().rename(columns={"Date": "date"}).copy()
-        stacked["symbol"] = stacked.get("symbol", symbol or "")
+        stacked = df.reset_index().rename(columns={"Date": "date", "index": "date"}).copy()
+        if "symbol" not in stacked.columns:
+            stacked["symbol"] = symbol or ""
 
     field_map = {
         "Open": "open",
@@ -60,6 +70,10 @@ def normalize_yfinance_prices(df: pd.DataFrame, symbol: str | None = None) -> pd
     normalized = normalized[columns]
 
     normalized = normalized.sort_values(["symbol", "date"]).reset_index(drop=True)
+    required = {"date", "symbol", "close"}
+    missing = required - set(normalized.columns)
+    if missing:
+        raise ValueError(f"Normalized data is missing required columns: {missing}")
     return normalized
 
 

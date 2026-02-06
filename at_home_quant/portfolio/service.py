@@ -51,9 +51,12 @@ def _save_snapshot(session: Session, portfolio: TargetPortfolio) -> None:
     session.commit()
 
 
-def _load_last_snapshot(session: Session) -> TargetPortfolio | None:
+def _load_last_snapshot(session: Session, before_date: datetime.date | None = None) -> TargetPortfolio | None:
+    stmt = select(PortfolioSnapshot)
+    if before_date is not None:
+        stmt = stmt.where(PortfolioSnapshot.as_of_date < before_date)
     row = session.execute(
-        select(PortfolioSnapshot).order_by(PortfolioSnapshot.as_of_date.desc())
+        stmt.order_by(PortfolioSnapshot.as_of_date.desc())
     ).scalar_one_or_none()
     if row is None:
         return None
@@ -73,6 +76,7 @@ def build_monthly_portfolio(
     top_n: int = 15,
     max_position: float = DEFAULT_MAX_POSITION,
     weighting_method: str = "softmax",
+    persist_snapshot: bool = True,
     session: Session | None = None,
 ) -> TargetPortfolio:
     def _build(session_obj: Session) -> TargetPortfolio:
@@ -109,7 +113,8 @@ def build_monthly_portfolio(
             defensive_exposure=defensive_exposure,
         )
         portfolio.validate()
-        _save_snapshot(session_obj, portfolio)
+        if persist_snapshot:
+            _save_snapshot(session_obj, portfolio)
         return portfolio
 
     if session is not None:
@@ -120,13 +125,21 @@ def build_monthly_portfolio(
 
 
 def compute_rebalance(
-    as_of_date: datetime.date, threshold: float = 0.005, session: Session | None = None
+    as_of_date: datetime.date,
+    threshold: float = 0.005,
+    top_n: int = 15,
+    session: Session | None = None,
 ) -> List[RebalanceInstruction]:
     def _compute(session_obj: Session) -> List[RebalanceInstruction]:
-        current = _load_last_snapshot(session_obj)
+        current = _load_last_snapshot(session_obj, before_date=as_of_date)
         if current is None:
-            raise ValueError("No prior portfolio snapshot available")
-        target = build_monthly_portfolio(as_of_date, session=session_obj)
+            raise ValueError(f"No prior portfolio snapshot available before {as_of_date}")
+        target = build_monthly_portfolio(
+            as_of_date,
+            top_n=top_n,
+            persist_snapshot=False,
+            session=session_obj,
+        )
         return diff_portfolios(current=current, target=target, threshold=threshold)
 
     if session is not None:

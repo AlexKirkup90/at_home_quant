@@ -5,7 +5,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from at_home_quant.data.tickers import BENCHMARKS, SAMPLE_NASDAQ100, TickerInfo
-from at_home_quant.db.models import Base, PriceDaily, Ticker
+from at_home_quant.db.models import Base, PortfolioSnapshot, PriceDaily, Ticker
 from at_home_quant.portfolio.service import build_monthly_portfolio, compute_rebalance
 
 
@@ -64,7 +64,10 @@ def test_end_to_end_portfolio_and_rebalance():
         portfolio = build_monthly_portfolio(as_of_first, session=session)
         assert abs(sum(p.weight for p in portfolio.positions) - 1.0) < 1e-6
         assert portfolio.universe_name == "NASDAQ100"
+        assert session.query(PortfolioSnapshot).count() == 1
 
         instructions = compute_rebalance(as_of_second, session=session)
         assert instructions
         assert all(instr.action in {"buy", "sell", "hold"} for instr in instructions)
+        # Rebalance is read-only and must not write a new snapshot.
+        assert session.query(PortfolioSnapshot).count() == 1
