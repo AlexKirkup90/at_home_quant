@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import enum
+import datetime
 from dataclasses import dataclass
 from typing import Dict, Iterable, Mapping
 
@@ -25,6 +26,8 @@ class TickerInfo:
     asset_type: TickerType
     universe: Universe | None = None
     currency: str | None = None
+    membership_start: datetime.date = datetime.date(1900, 1, 1)
+    membership_end: datetime.date | None = None
 
 
 BENCHMARKS: Dict[str, TickerInfo] = {
@@ -65,6 +68,19 @@ UNIVERSE_BENCHMARK_SYMBOL: Dict[Universe, str] = {
     Universe.FTSE250: "VMID",
 }
 
+SECTOR_BY_SYMBOL: Dict[str, str] = {
+    "AAPL": "Technology",
+    "MSFT": "Technology",
+    "AMZN": "Consumer Discretionary",
+    "GOOGL": "Communication Services",
+    "TSCO.L": "Consumer Staples",
+    "BVIC.L": "Consumer Staples",
+}
+
+
+def sector_for_symbol(symbol: str) -> str:
+    return SECTOR_BY_SYMBOL.get(symbol, f"UNKNOWN:{symbol}")
+
 
 def list_all_symbols() -> list[str]:
     return list(ALL_TICKERS.keys())
@@ -84,6 +100,8 @@ __all__ = [
     "SAMPLE_FTSE250",
     "ALL_TICKERS",
     "UNIVERSE_BENCHMARK_SYMBOL",
+    "SECTOR_BY_SYMBOL",
+    "sector_for_symbol",
     "list_all_symbols",
     "iter_universe",
 ]

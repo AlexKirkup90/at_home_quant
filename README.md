@@ -36,6 +36,11 @@ Data mode and health-gate controls:
 - `BENCHMARK_SELECTION_TIMING=period_start|period_end` (defaults to `period_start` to reduce look-ahead bias).
 - `TRANSACTION_COST_BPS=5` (one-way transaction cost applied to turnover in performance calculation).
 - `SLIPPAGE_BPS=5` (one-way slippage applied to turnover in performance calculation).
+- `RISK_MAX_POSITION=0.12` (max single equity position weight in portfolio construction).
+- `RISK_MAX_SECTOR_WEIGHT=0.35` (max aggregate equity weight by sector).
+- `RISK_MAX_TURNOVER=0.35` (max monthly turnover allowed by the risk overlay).
+- `RISK_MIN_ADV_USD=5000000` (minimum average daily dollar volume for equity eligibility).
+- `RISK_ADV_LOOKBACK_DAYS=20` (ADV lookback window in business days).
 
 3. **Run the initial historical ETL**
 
@@ -91,6 +96,8 @@ python -m at_home_quant.scripts.print_ranking --universe NASDAQ100 --as-of 2025-
 
 Ensure equity constituents and price history for the chosen universe exist in the database (the synthetic loaders used in tests are compatible with this flow).
 
+Universe membership is now point-in-time aware through the `universe_memberships` table, so ranking uses constituents active on each requested `as_of_date`.
+
 ## Portfolio Construction & Rebalancing (Phase 4)
 
 Phase 4 connects the regime and ranking engines to produce a monthly target portfolio and minimal-turnover rebalance instructions.
@@ -100,6 +107,11 @@ Phase 4 connects the regime and ranking engines to produce a monthly target port
   - Allocates equity exposure to the top-ranked stocks (softmax weights with position caps).
   - Assigns the remaining defensive sleeve to Gold (40%) and Cash/T-Bills (60%).
 - Compare snapshots with `compute_rebalance(as_of_date)` to generate buy/sell/hold deltas.
+- Portfolio construction applies a risk overlay before snapshot save:
+  - max single equity position,
+  - max sector weight,
+  - turnover cap (vs prior snapshot),
+  - liquidity floor using average daily dollar volume.
 
 A CLI helper prints the monthly rebalance plan:
 
@@ -125,6 +137,16 @@ python -m at_home_quant.scripts.print_performance [--csv performance.csv]
 ```
 
 This prints monthly returns, benchmarks, and alpha along with summary statistics; the optional CSV flag exports the monthly series.
+
+## Walk-Forward Run Registry
+
+You can run and persist a walk-forward backtest artifact bundle (config, code hash, data snapshot hash, monthly series, and summary stats):
+
+```bash
+python -m at_home_quant.scripts.run_walk_forward --start 2024-01-01 --end 2025-12-31 --top-n 15
+```
+
+Runs are saved in the `backtest_runs` table for auditability and reproducibility.
 
 ## Running the Dashboard
 

@@ -1,4 +1,5 @@
 import datetime
+import json
 
 import pandas as pd
 import pytest
@@ -51,6 +52,7 @@ def _seed_prices(session: Session, as_of_date: datetime.date, periods: int = 400
                     ticker_id=ticker_id,
                     date=dt.date(),
                     adj_close=price,
+                    volume=2_000_000,
                 )
             )
     session.commit()
@@ -65,6 +67,8 @@ def test_end_to_end_portfolio_and_rebalance():
         portfolio = build_monthly_portfolio(as_of_first, session=session)
         assert abs(sum(p.weight for p in portfolio.positions) - 1.0) < 1e-6
         assert portfolio.universe_name == "NASDAQ100"
+        assert portfolio.risk_report is not None
+        assert portfolio.risk_report.is_within_limits
         assert session.query(PortfolioSnapshot).count() == 1
 
         instructions = compute_rebalance(as_of_second, session=session)
@@ -81,3 +85,26 @@ def test_data_health_gate_blocks_portfolio_when_history_is_insufficient():
         _seed_prices(session, as_of, periods=120)
         with pytest.raises(ValueError, match="Data health gate failed"):
             build_monthly_portfolio(as_of, session=session)
+
+
+def test_risk_overlay_blocks_snapshot_save_when_constraints_breached(monkeypatch):
+    as_of_first = datetime.date(2024, 12, 31)
+    as_of_second = datetime.date(2025, 1, 31)
+    engine = create_engine("sqlite:///:memory:")
+    with Session(engine) as session:
+        _seed_prices(session, as_of_second)
+        session.add(
+            PortfolioSnapshot(
+                as_of_date=as_of_first,
+                universe_name="NASDAQ100",
+                equity_exposure=1.0,
+                defensive_exposure=0.0,
+                positions_json=json.dumps([{"ticker": "AAPL", "weight": 1.0, "asset_type": "equity"}]),
+            )
+        )
+        session.commit()
+        monkeypatch.setenv("DATA_MODE", "production")
+        monkeypatch.setenv("RISK_MAX_TURNOVER", "0.05")
+        monkeypatch.setenv("RISK_MAX_POSITION", "0.12")
+        with pytest.raises(ValueError, match="Risk overlay gate failed"):
+            build_monthly_portfolio(as_of_second, session=session)

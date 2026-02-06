@@ -5,10 +5,11 @@ from typing import List
 
 import pandas as pd
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from at_home_quant.data.tickers import Universe
-from at_home_quant.db.models import PriceDaily, Ticker
+from at_home_quant.db.models import PriceDaily, Ticker, UniverseMembership
 from at_home_quant.db.session import get_session
 from at_home_quant.selection.factors import (
     momentum_12m,
@@ -61,9 +62,33 @@ def _compute_factors_for_ticker(symbol: str, series: pd.Series) -> dict:
 
 
 def _compute_universe_factors(session: Session, universe: Universe, as_of_date: datetime.date) -> pd.DataFrame:
-    tickers = session.execute(
-        select(Ticker.symbol).where(Ticker.universe == universe).order_by(Ticker.symbol)
-    ).scalars()
+    try:
+        active_members = session.execute(
+            select(Ticker.symbol)
+            .join(UniverseMembership, UniverseMembership.ticker_id == Ticker.id)
+            .where(
+                UniverseMembership.universe == universe,
+                UniverseMembership.effective_from <= as_of_date,
+                (UniverseMembership.effective_to.is_(None) | (UniverseMembership.effective_to >= as_of_date)),
+            )
+            .order_by(Ticker.symbol)
+        ).scalars().all()
+        if active_members:
+            tickers = active_members
+        else:
+            membership_exists = session.execute(
+                select(UniverseMembership.id).where(UniverseMembership.universe == universe).limit(1)
+            ).scalar_one_or_none()
+            if membership_exists is None:
+                tickers = session.execute(
+                    select(Ticker.symbol).where(Ticker.universe == universe).order_by(Ticker.symbol)
+                ).scalars().all()
+            else:
+                tickers = []
+    except SQLAlchemyError:
+        tickers = session.execute(
+            select(Ticker.symbol).where(Ticker.universe == universe).order_by(Ticker.symbol)
+        ).scalars().all()
     factors: list[dict] = []
     for symbol in tickers:
         series = _load_price_series(session, symbol, as_of_date)

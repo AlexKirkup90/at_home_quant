@@ -9,7 +9,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from at_home_quant.data.tickers import ALL_TICKERS, TickerInfo
-from at_home_quant.db.models import PriceDaily, Ticker
+from at_home_quant.db.models import PriceDaily, Ticker, UniverseMembership
 
 _SQLITE_MAX_VARIABLES = 999
 _PRICE_UPSERT_COLUMNS = 9
@@ -39,6 +39,25 @@ def upsert_tickers(session: Session, tickers: Mapping[str, TickerInfo] | Iterabl
             },
         )
         session.execute(stmt)
+        if info.universe is not None:
+            ticker_id = session.execute(
+                select(Ticker.id).where(Ticker.symbol == info.symbol)
+            ).scalar_one()
+            membership_stmt = sqlite_insert(UniverseMembership).values(
+                ticker_id=ticker_id,
+                universe=info.universe,
+                effective_from=info.membership_start,
+                effective_to=info.membership_end,
+            )
+            membership_stmt = membership_stmt.on_conflict_do_update(
+                index_elements=[
+                    UniverseMembership.ticker_id,
+                    UniverseMembership.universe,
+                    UniverseMembership.effective_from,
+                ],
+                set_={"effective_to": info.membership_end},
+            )
+            session.execute(membership_stmt)
 
 
 def _ticker_symbol_to_id(session: Session, symbols: Sequence[str]) -> dict[str, int]:

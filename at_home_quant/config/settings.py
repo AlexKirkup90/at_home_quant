@@ -41,6 +41,26 @@ class Settings(BaseSettings):
         5.0,
         description="One-way slippage in basis points applied to portfolio turnover.",
     )
+    risk_max_position: float = Field(
+        0.12,
+        description="Maximum target weight allowed for any single position.",
+    )
+    risk_max_sector_weight: float = Field(
+        0.35,
+        description="Maximum target aggregate weight for any single equity sector.",
+    )
+    risk_max_turnover: float = Field(
+        0.35,
+        description="Maximum monthly portfolio turnover allowed by the risk overlay.",
+    )
+    risk_min_adv_usd: float = Field(
+        5_000_000.0,
+        description="Minimum average daily dollar volume required for equity eligibility.",
+    )
+    risk_adv_lookback_days: int = Field(
+        20,
+        description="Lookback window (business days) for average daily dollar volume estimation.",
+    )
     benchmark_tickers: List[str] = Field(
         default_factory=lambda: ["QQQ", "SPY", "VMID", "GLD", "IAU", "BIL"],
         description="Default benchmark/asset tickers to fetch",

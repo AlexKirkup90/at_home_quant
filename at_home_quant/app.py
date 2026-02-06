@@ -26,6 +26,7 @@ else:
     STREAMLIT_IMPORT_ERROR = None
 
 from at_home_quant.config.settings import get_settings
+from at_home_quant.backtest.service import run_walk_forward_backtest
 from at_home_quant.data.tickers import Universe
 from at_home_quant.data.health import get_data_health_report
 from at_home_quant.db.models import PortfolioSnapshot, PriceDaily
@@ -33,7 +34,7 @@ from at_home_quant.db.session import get_session
 from at_home_quant.performance.models import MonthlyPerformance, PerformanceSummary
 from at_home_quant.performance.stats import compute_performance_summary
 from at_home_quant.performance.service import get_monthly_performance
-from at_home_quant.portfolio.models import RebalanceInstruction, TargetPortfolio
+from at_home_quant.portfolio.models import PortfolioRiskReport, RebalanceInstruction, TargetPortfolio
 from at_home_quant.portfolio.service import build_monthly_portfolio, compute_rebalance
 from at_home_quant.regime.models import RegimeDecision, UniverseScore
 from at_home_quant.regime.service import get_current_regime
@@ -87,6 +88,15 @@ def performance_to_dataframe(performance: Iterable[MonthlyPerformance]) -> pd.Da
 
 def summary_to_dataframe(summary: PerformanceSummary) -> pd.DataFrame:
     return pd.DataFrame([asdict(summary)])
+
+
+def risk_report_to_dataframe(report: PortfolioRiskReport | None) -> pd.DataFrame:
+    if report is None:
+        return pd.DataFrame()
+    rows = [asdict(violation) for violation in report.violations]
+    if not rows:
+        return pd.DataFrame(columns=["code", "message", "current_value", "limit_value"])
+    return pd.DataFrame(rows)
 
 
 def _format_pct(value: float | None) -> str:
@@ -238,6 +248,21 @@ def show_portfolio_section() -> None:
     st.subheader("Target portfolio preview")
     portfolio_df = portfolio_to_dataframe(target_portfolio)
     st.dataframe(portfolio_df, use_container_width=True)
+    risk_report = target_portfolio.risk_report
+    if risk_report is not None:
+        st.subheader("Risk overlay")
+        rcol1, rcol2, rcol3, rcol4 = st.columns(4)
+        rcol1.metric("Max position", _format_pct(risk_report.max_position_weight))
+        rcol2.metric("Max sector", _format_pct(risk_report.max_sector_weight))
+        rcol3.metric("Turnover", _format_pct(risk_report.turnover))
+        rcol4.metric("Min ADV (USD)", f"{risk_report.min_adv_usd_in_portfolio:,.0f}" if risk_report.min_adv_usd_in_portfolio is not None else "N/A")
+        if risk_report.is_within_limits:
+            st.success("Risk overlay checks passed.")
+        else:
+            st.warning("Risk overlay checks have violations.")
+            violations_df = risk_report_to_dataframe(risk_report)
+            if not violations_df.empty:
+                st.dataframe(violations_df, use_container_width=True, hide_index=True)
 
     if st.button("Save Target Snapshot"):
         with st.spinner("Saving target snapshot..."):
@@ -411,7 +436,7 @@ def show_admin_section() -> None:
         "Running the historical load may take some time."
     )
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
 
     with col1:
         if st.button("Run Historical ETL"):
@@ -430,6 +455,21 @@ def show_admin_section() -> None:
                     st.success("Daily update completed successfully.")
                 except Exception as exc:  # noqa: BLE001
                     st.error(f"Daily update failed: {exc}")
+
+    with col3:
+        if st.button("Run Walk-Forward Backtest"):
+            with st.spinner("Running walk-forward backtest..."):
+                try:
+                    result = run_walk_forward_backtest()
+                    st.success(
+                        f"Backtest run {result.run_id} completed with {result.summary.months} monthly periods."
+                    )
+                    st.caption(
+                        "Backtest artifacts saved: "
+                        f"code_hash={result.code_hash or 'N/A'}, data_snapshot_hash={result.data_snapshot_hash}"
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Walk-forward backtest failed: {exc}")
 
 
 # ---------- Entry point ----------
