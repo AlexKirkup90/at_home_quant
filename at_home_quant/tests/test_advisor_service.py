@@ -15,7 +15,7 @@ from at_home_quant.advisor.service import (
     save_executed_from_decisions,
 )
 from at_home_quant.data.tickers import BENCHMARKS, SAMPLE_NASDAQ100, TickerInfo, TickerType
-from at_home_quant.db.models import Base, PriceDaily, Ticker
+from at_home_quant.db.models import Base, DatasetSnapshot, PriceDaily, Ticker
 from at_home_quant.portfolio.models import TargetPosition
 
 
@@ -79,11 +79,25 @@ def _seed_prices(session: Session, as_of_date: datetime.date, periods: int = 420
     session.commit()
 
 
+def _seed_feature_snapshot(session: Session, as_of_date: datetime.date, snapshot_hash: str) -> None:
+    session.add(
+        DatasetSnapshot(
+            layer="feature",
+            as_of_date=as_of_date,
+            snapshot_hash=snapshot_hash,
+            row_count=1,
+            run_id=None,
+        )
+    )
+    session.commit()
+
+
 def test_weekly_advisor_flow_end_to_end():
     engine = create_engine("sqlite:///:memory:")
     as_of = datetime.date(2025, 2, 28)
     with Session(engine) as session:
         _seed_prices(session, as_of)
+        _seed_feature_snapshot(session, as_of, "a" * 64)
         positions = [
             TargetPosition("AAPL", 0.40, "equity"),
             TargetPosition("MSFT", 0.35, "equity"),
@@ -103,7 +117,9 @@ def test_weekly_advisor_flow_end_to_end():
             session=session,
         )
 
-        report = generate_weekly_recommendation(as_of_date=as_of, top_n=2, session=session)
+        report = generate_weekly_recommendation(
+            as_of_date=as_of, top_n=2, data_snapshot_hash="a" * 64, session=session
+        )
         assert report.batch_id > 0
         assert report.recommendations
         latest_report = get_latest_weekly_report(as_of_date=as_of, session=session)
@@ -138,6 +154,7 @@ def test_weekly_recommendation_applies_equivalence_and_trade_gating(monkeypatch)
     as_of = datetime.date(2025, 2, 28)
     with Session(engine) as session:
         _seed_prices(session, as_of)
+        _seed_feature_snapshot(session, as_of, "b" * 64)
         positions = [
             TargetPosition("VHYL", 0.22, "equity"),
             TargetPosition("VUSA", 0.24, "equity"),
@@ -147,7 +164,9 @@ def test_weekly_recommendation_applies_equivalence_and_trade_gating(monkeypatch)
         save_advisor_portfolio_snapshot(as_of_date=as_of, positions=positions, snapshot_type="baseline", session=session)
         save_advisor_portfolio_snapshot(as_of_date=as_of, positions=positions, snapshot_type="executed", session=session)
 
-        report = generate_weekly_recommendation(as_of_date=as_of, top_n=2, session=session)
+        report = generate_weekly_recommendation(
+            as_of_date=as_of, top_n=2, data_snapshot_hash="b" * 64, session=session
+        )
         by_ticker = {item.ticker: item for item in report.recommendations}
         # Equivalent mapping should keep user sleeve tickers instead of forcing GLD/BIL.
         assert "GLD" not in by_ticker
@@ -159,3 +178,85 @@ def test_weekly_recommendation_applies_equivalence_and_trade_gating(monkeypatch)
         assert small_moves
         assert all(item.recommendation == "hold" for item in small_moves)
         assert all(item.rationale.startswith("[") for item in report.recommendations)
+
+
+def test_weekly_recommendation_requires_valid_feature_snapshot_hash():
+    engine = create_engine("sqlite:///:memory:")
+    as_of = datetime.date(2025, 2, 28)
+    with Session(engine) as session:
+        _seed_prices(session, as_of)
+        positions = [
+            TargetPosition("AAPL", 0.40, "equity"),
+            TargetPosition("MSFT", 0.35, "equity"),
+            TargetPosition("GLD", 0.10, "gold"),
+            TargetPosition("BIL", 0.15, "cash"),
+        ]
+        save_advisor_portfolio_snapshot(as_of_date=as_of, positions=positions, snapshot_type="baseline", session=session)
+        save_advisor_portfolio_snapshot(as_of_date=as_of, positions=positions, snapshot_type="executed", session=session)
+
+        with pytest.raises(ValueError, match="requires a data snapshot hash"):
+            generate_weekly_recommendation(as_of_date=as_of, top_n=2, session=session)
+
+        with pytest.raises(ValueError, match="was not found"):
+            generate_weekly_recommendation(
+                as_of_date=as_of,
+                top_n=2,
+                data_snapshot_hash="f" * 64,
+                session=session,
+            )
+
+
+def test_weekly_recommendation_is_deterministic_for_same_snapshot():
+    engine = create_engine("sqlite:///:memory:")
+    as_of = datetime.date(2025, 2, 28)
+    with Session(engine) as session:
+        _seed_prices(session, as_of)
+        snapshot_hash = "c" * 64
+        _seed_feature_snapshot(session, as_of, snapshot_hash)
+        positions = [
+            TargetPosition("AAPL", 0.40, "equity"),
+            TargetPosition("MSFT", 0.35, "equity"),
+            TargetPosition("GLD", 0.10, "gold"),
+            TargetPosition("BIL", 0.15, "cash"),
+        ]
+        save_advisor_portfolio_snapshot(as_of_date=as_of, positions=positions, snapshot_type="baseline", session=session)
+        save_advisor_portfolio_snapshot(as_of_date=as_of, positions=positions, snapshot_type="executed", session=session)
+
+        report_a = generate_weekly_recommendation(
+            as_of_date=as_of,
+            top_n=2,
+            data_snapshot_hash=snapshot_hash,
+            session=session,
+        )
+        report_b = generate_weekly_recommendation(
+            as_of_date=as_of,
+            top_n=2,
+            data_snapshot_hash=snapshot_hash,
+            session=session,
+        )
+
+        items_a = sorted(
+            (
+                item.ticker,
+                item.recommendation,
+                round(item.current_weight, 8),
+                round(item.target_weight, 8),
+                round(item.delta, 8),
+                item.rationale,
+            )
+            for item in report_a.recommendations
+        )
+        items_b = sorted(
+            (
+                item.ticker,
+                item.recommendation,
+                round(item.current_weight, 8),
+                round(item.target_weight, 8),
+                round(item.delta, 8),
+                item.rationale,
+            )
+            for item in report_b.recommendations
+        )
+        assert report_a.best_universe == report_b.best_universe
+        assert round(report_a.best_universe_score, 8) == round(report_b.best_universe_score, 8)
+        assert items_a == items_b

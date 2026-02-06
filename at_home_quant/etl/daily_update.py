@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import datetime
+import logging
 from typing import Sequence
 
 import pandas as pd
 from sqlalchemy import select
 
 from at_home_quant.config.settings import get_settings
+from at_home_quant.data.health import PORTFOLIO_REQUIRED_SYMBOLS
 from at_home_quant.data.fetcher import compute_returns, fetch_prices_for_universe
 from at_home_quant.data.tickers import ALL_TICKERS, list_all_symbols
 from at_home_quant.db import crud
@@ -48,16 +50,32 @@ def run_daily_update() -> None:
     for symbol in symbols:
         last_date = latest_dates.get(symbol)
         if last_date:
-            fetch_start_by_symbol[symbol] = last_date + datetime.timedelta(days=1)
+            # Start from the latest stored point instead of +1 day.
+            # This keeps incremental updates idempotent and avoids false empty
+            # responses when same-day market bars are not yet available.
+            fetch_start_by_symbol[symbol] = last_date
         else:
             fetch_start_by_symbol[symbol] = settings.default_start_date
 
     frames = []
+    required_symbols = set(PORTFOLIO_REQUIRED_SYMBOLS)
     for symbol in symbols:
         start_date = fetch_start_by_symbol[symbol]
-        if start_date > today:
+        # Skip same-day fetches; intraday/partial vendor responses are often empty.
+        # The next backend run will pick up that bar once it is published.
+        if start_date >= today:
             continue
-        prices = fetch_prices_for_universe([symbol], start=start_date, end=None)
+        try:
+            prices = fetch_prices_for_universe([symbol], start=start_date, end=None)
+        except Exception as exc:  # noqa: BLE001
+            if symbol in required_symbols:
+                raise
+            logging.getLogger(__name__).warning(
+                "Skipping non-core symbol %s due to fetch failure: %s",
+                symbol,
+                exc,
+            )
+            continue
         frames.append(prices)
 
     if not frames:

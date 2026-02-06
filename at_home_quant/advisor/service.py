@@ -21,6 +21,7 @@ from at_home_quant.db import crud
 from at_home_quant.db.models import (
     AdvisorPortfolioSnapshot,
     Base,
+    DatasetSnapshot,
     RecommendationDecision,
     WeeklyRecommendationBatch,
     WeeklyRecommendationItem,
@@ -317,6 +318,27 @@ def generate_weekly_recommendation(
     def _generate(session_obj: Session) -> WeeklyAdvisorReport:
         settings = get_settings()
         Base.metadata.create_all(bind=session_obj.bind)
+        if not data_snapshot_hash:
+            raise ValueError(
+                "Weekly recommendation requires a data snapshot hash. "
+                "Run the backend pipeline first."
+            )
+        snapshot = session_obj.execute(
+            select(DatasetSnapshot).where(
+                DatasetSnapshot.layer == "feature",
+                DatasetSnapshot.snapshot_hash == data_snapshot_hash,
+            )
+        ).scalars().first()
+        if snapshot is None:
+            raise ValueError(
+                f"Feature snapshot hash '{data_snapshot_hash}' was not found. "
+                "Run the backend pipeline first."
+            )
+        if snapshot.as_of_date < as_of_date:
+            raise ValueError(
+                "Feature snapshot is older than requested as-of date. "
+                "Run backend pipeline for the selected date."
+            )
         current_portfolio = get_latest_advisor_portfolio(
             snapshot_type="executed",
             as_of_date=as_of_date,

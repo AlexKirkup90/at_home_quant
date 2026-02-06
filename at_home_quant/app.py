@@ -30,7 +30,6 @@ from at_home_quant.config.settings import get_settings
 from at_home_quant.backend.service import run_backend_pipeline
 from at_home_quant.advisor.models import WorkflowDecisionInput
 from at_home_quant.advisor.service import (
-    generate_weekly_recommendation,
     get_latest_advisor_portfolio,
     get_latest_weekly_report,
     log_decision,
@@ -41,7 +40,7 @@ from at_home_quant.backtest.service import run_walk_forward_backtest
 from at_home_quant.data.tickers import Universe
 from at_home_quant.data.health import get_data_health_report
 from at_home_quant.db.models import PortfolioSnapshot, PriceDaily
-from at_home_quant.db.session import get_session
+from at_home_quant.db.session import get_session, init_db
 from at_home_quant.performance.models import MonthlyPerformance, PerformanceSummary
 from at_home_quant.performance.stats import compute_performance_summary
 from at_home_quant.performance.service import get_monthly_performance
@@ -339,12 +338,17 @@ def show_weekly_advisor_section() -> None:
 
     st.subheader("Step 3 — Generate Weekly Recommendation")
     if st.button("Step 3: Generate Recommendation", key="weekly_step3"):
-        with st.spinner("Generating weekly recommendation..."):
+        with st.spinner("Running backend pipeline and generating weekly recommendation..."):
             try:
-                report = generate_weekly_recommendation(as_of_date=as_of_date)
-                st.success(
-                    f"Recommendation batch {report.batch_id} generated for {report.as_of_date.isoformat()}."
+                report = run_backend_pipeline(
+                    as_of_date=as_of_date,
+                    include_weekly_recommendation=True,
+                    retries=2,
                 )
+                st.success(
+                    f"Recommendation batch {report.recommendation_batch_id} generated for {report.as_of_date.isoformat()}."
+                )
+                st.caption(f"snapshot={report.data_snapshot_hash}")
             except Exception as exc:  # noqa: BLE001
                 st.error(f"Unable to generate recommendation: {exc}")
 
@@ -828,6 +832,7 @@ def show_admin_section() -> None:
 
 def main() -> None:
     require_streamlit()
+    init_db()
     st.set_page_config(page_title="At-Home Quant Dashboard", layout="wide")
     settings = get_settings()
     title_col, badge_col = st.columns([4, 2])

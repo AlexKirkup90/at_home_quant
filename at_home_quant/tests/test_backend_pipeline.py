@@ -7,7 +7,7 @@ from sqlalchemy.pool import StaticPool
 
 import at_home_quant.backend.service as backend_service_module
 from at_home_quant.data.tickers import BENCHMARKS, TickerInfo
-from at_home_quant.db.models import BackendRun, Base, DatasetSnapshot, PriceDaily, Ticker
+from at_home_quant.db.models import BackendRun, Base, DataLayerPrice, DatasetSnapshot, PriceDaily, Ticker
 
 
 def _add_ticker(session: Session, info: TickerInfo) -> int:
@@ -130,3 +130,44 @@ def test_run_backend_pipeline_marks_failed_on_empty_data(monkeypatch):
         run = session.query(BackendRun).order_by(BackendRun.id.desc()).first()
         assert run is not None
         assert run.status == "failed"
+
+
+def test_run_backend_pipeline_persists_layer_prices_with_small_insert_batches(monkeypatch):
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    with Session(engine) as session:
+        _seed_prices(session, datetime.date(2025, 2, 28))
+
+    def session_override():
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _ctx():
+            with Session(engine) as session:
+                try:
+                    yield session
+                    session.commit()
+                except Exception:
+                    session.rollback()
+                    raise
+
+        return _ctx()
+
+    monkeypatch.setattr(backend_service_module, "get_session", session_override)
+    monkeypatch.setattr(backend_service_module, "init_db", lambda: None)
+    monkeypatch.setattr(backend_service_module, "run_daily_update", lambda: None)
+    monkeypatch.setattr(backend_service_module, "SQLITE_SAFE_INSERT_BATCH_SIZE", 1)
+
+    result = backend_service_module.run_backend_pipeline(
+        as_of_date=datetime.date(2025, 2, 28),
+        include_weekly_recommendation=False,
+        retries=0,
+    )
+
+    assert result.status == "succeeded"
+    with Session(engine) as session:
+        row_count = session.query(DataLayerPrice).count()
+    assert row_count > 0

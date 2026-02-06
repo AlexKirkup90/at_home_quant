@@ -19,6 +19,9 @@ from at_home_quant.db.session import get_session, init_db
 from at_home_quant.etl.daily_update import run_daily_update
 
 
+SQLITE_SAFE_INSERT_BATCH_SIZE = 75
+
+
 def _load_prices_df(session: Session, as_of_date: datetime.date) -> pd.DataFrame:
     rows = session.execute(
         select(
@@ -118,11 +121,13 @@ def _persist_layer_snapshot(
         )
 
     if records:
-        stmt = sqlite_insert(DataLayerPrice).values(records)
-        stmt = stmt.on_conflict_do_nothing(
-            index_elements=[DataLayerPrice.snapshot_id, DataLayerPrice.ticker_id, DataLayerPrice.date]
-        )
-        session.execute(stmt)
+        for idx in range(0, len(records), SQLITE_SAFE_INSERT_BATCH_SIZE):
+            batch = records[idx : idx + SQLITE_SAFE_INSERT_BATCH_SIZE]
+            stmt = sqlite_insert(DataLayerPrice).values(batch)
+            stmt = stmt.on_conflict_do_nothing(
+                index_elements=[DataLayerPrice.snapshot_id, DataLayerPrice.ticker_id, DataLayerPrice.date]
+            )
+            session.execute(stmt)
     return snapshot
 
 
