@@ -261,11 +261,11 @@ def show_data_health_panel(as_of_date: datetime.date | None = None) -> None:
 def show_weekly_advisor_section() -> None:
     require_streamlit()
     st.header("Weekly Advisor")
-    st.caption("Simple weekly workflow: sync, confirm holdings, generate recommendation, decide, and log execution.")
+    st.caption("Five-step workflow: run backend, confirm holdings, decide, save execution, and review outcomes.")
 
     latest_price_date = get_latest_price_date()
     if latest_price_date is None:
-        st.warning("No price data found. Run Step 1 or the Admin ETL tools first.")
+        st.warning("No price data found. Run Step 1 to initialize backend data.")
         return
 
     as_of_date = st.date_input(
@@ -275,11 +275,14 @@ def show_weekly_advisor_section() -> None:
         key="weekly_review_date",
     )
 
-    st.subheader("Run Backend (One Click)")
+    if "weekly_holdings_refresh_required" not in st.session_state:
+        st.session_state["weekly_holdings_refresh_required"] = False
+
+    st.subheader("Step 1 — Run Backend")
     st.caption(
-        "Runs ETL sync, data quality gate, versioned raw/clean/feature snapshots, and weekly recommendation generation."
+        "Runs ETL sync, quality gates, versioned data snapshots, experiment registration, and recommendation generation."
     )
-    if st.button("Run Backend", key="weekly_run_backend"):
+    if st.button("Step 1: Run Backend Pipeline", key="weekly_step1"):
         with st.spinner("Running backend pipeline..."):
             try:
                 result = run_backend_pipeline(
@@ -287,6 +290,7 @@ def show_weekly_advisor_section() -> None:
                     include_weekly_recommendation=True,
                     retries=2,
                 )
+                st.session_state["weekly_holdings_refresh_required"] = False
                 st.success(
                     f"Backend run {result.run_id} succeeded for {result.as_of_date.isoformat()}."
                 )
@@ -296,15 +300,6 @@ def show_weekly_advisor_section() -> None:
                 )
             except Exception as exc:  # noqa: BLE001
                 st.error(f"Backend run failed: {exc}")
-
-    st.subheader("Step 1 — Sync Data")
-    if st.button("Step 1: Sync Data (Daily Update)", key="weekly_step1"):
-        with st.spinner("Running daily update..."):
-            try:
-                run_daily_update()
-                st.success("Data sync completed.")
-            except Exception as exc:  # noqa: BLE001
-                st.error(f"Daily update failed: {exc}")
 
     st.subheader("Step 2 — Confirm Current Holdings")
     current_executed = get_latest_advisor_portfolio("executed", as_of_date=as_of_date)
@@ -345,35 +340,26 @@ def show_weekly_advisor_section() -> None:
             st.success(
                 f"Saved current holdings for {as_of_date.isoformat()} ({len(positions)} positions)."
             )
+            st.session_state["weekly_holdings_refresh_required"] = True
+            st.info("Holdings were updated. Re-run Step 1 before making decisions.")
         except Exception as exc:  # noqa: BLE001
             st.error(f"Unable to save current holdings: {exc}")
 
-    st.subheader("Step 3 — Generate Weekly Recommendation")
-    if st.button("Step 3: Generate Recommendation", key="weekly_step3"):
-        with st.spinner("Running backend pipeline and generating weekly recommendation..."):
-            try:
-                report = run_backend_pipeline(
-                    as_of_date=as_of_date,
-                    include_weekly_recommendation=True,
-                    retries=2,
-                )
-                st.success(
-                    f"Recommendation batch {report.recommendation_batch_id} generated for {report.as_of_date.isoformat()}."
-                )
-                st.caption(f"snapshot={report.data_snapshot_hash} | experiment={report.experiment_id}")
-            except Exception as exc:  # noqa: BLE001
-                st.error(f"Unable to generate recommendation: {exc}")
-
     report = get_latest_weekly_report(as_of_date=as_of_date)
     if report is None:
-        st.info("No weekly recommendation generated yet. Complete Step 3.")
+        st.info("No weekly recommendation generated yet. Complete Step 1.")
         return
 
-    st.subheader("Step 4 — Decide (Follow / Ignore / Partial)")
+    if st.session_state.get("weekly_holdings_refresh_required"):
+        st.warning("Recommendation may be stale versus your latest holdings. Re-run Step 1.")
+
+    st.subheader("Step 3 — Decide (Follow / Ignore / Partial)")
     st.caption(
         f"Batch {report.batch_id} | As-of {report.as_of_date.isoformat()} | "
         f"Best universe {report.best_universe} (score {report.best_universe_score:.2f})"
     )
+    decided_count = sum(1 for item in report.recommendations if item.decision is not None)
+    st.caption(f"Decision coverage: {decided_count}/{len(report.recommendations)}")
     recommendation_df = pd.DataFrame(
         [
             {
@@ -441,8 +427,13 @@ def show_weekly_advisor_section() -> None:
                     st.error(f"Unable to save decision for {item.ticker}: {exc}")
             st.markdown("---")
 
-    st.subheader("Step 5 — Save Executed Portfolio")
-    if st.button("Step 5: Save Executed Portfolio From Decisions", key="weekly_step5"):
+    st.subheader("Step 4 — Save Executed Portfolio")
+    undecided_count = sum(1 for item in report.recommendations if item.decision is None)
+    if undecided_count > 0:
+        st.warning(
+            f"{undecided_count} recommendations have no explicit decision and will default to IGNORE in Step 4."
+        )
+    if st.button("Step 4: Save Executed Portfolio From Decisions", key="weekly_step4"):
         try:
             result = save_executed_from_decisions(report.batch_id)
             # Keep legacy snapshot table in sync for existing modules.
@@ -458,11 +449,50 @@ def show_weekly_advisor_section() -> None:
         except Exception as exc:  # noqa: BLE001
             st.error(f"Unable to save executed portfolio: {exc}")
 
-    st.subheader("Step 6 — Weekly Report")
+    st.subheader("Step 5 — Review Outcomes")
     metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
     metrics_col1.metric("Best Universe", report.best_universe)
     metrics_col2.metric("Universe Score", f"{report.best_universe_score:.2f}")
     metrics_col3.metric("Recommendations", str(len(report.recommendations)))
+    outcome_counts = {"follow": 0, "ignore": 0, "partial": 0, "unset": 0}
+    for item in report.recommendations:
+        decision_value = item.decision or "unset"
+        outcome_counts[decision_value] = outcome_counts.get(decision_value, 0) + 1
+    ocol1, ocol2, ocol3, ocol4 = st.columns(4)
+    ocol1.metric("Follow", str(outcome_counts["follow"]))
+    ocol2.metric("Ignore", str(outcome_counts["ignore"]))
+    ocol3.metric("Partial", str(outcome_counts["partial"]))
+    ocol4.metric("Unset", str(outcome_counts["unset"]))
+
+    review_rows = []
+    for item in report.recommendations:
+        decision = item.decision or "ignore"
+        if decision == "follow":
+            effective_weight = item.target_weight
+        elif decision == "partial":
+            midpoint = (item.current_weight + item.target_weight) / 2.0
+            effective_weight = item.executed_weight if item.executed_weight is not None else midpoint
+        else:
+            effective_weight = item.current_weight
+        review_rows.append(
+            {
+                "ticker": item.ticker,
+                "recommendation": item.recommendation,
+                "decision": item.decision or "",
+                "current_weight": item.current_weight,
+                "target_weight": item.target_weight,
+                "effective_weight": effective_weight,
+                "gap_vs_target": effective_weight - item.target_weight,
+            }
+        )
+    review_df = pd.DataFrame(review_rows)
+    if review_df.empty:
+        st.caption("No recommendation outcomes available yet.")
+    else:
+        for column in ["current_weight", "target_weight", "effective_weight", "gap_vs_target"]:
+            review_df[column] = review_df[column].map(lambda value: f"{float(value) * 100:.2f}%")
+        st.dataframe(review_df, use_container_width=True, hide_index=True)
+
     st.markdown("**Watchlist (near-buys)**")
     if not report.watchlist:
         st.caption("No watchlist candidates for this cycle.")
