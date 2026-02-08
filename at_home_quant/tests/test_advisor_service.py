@@ -397,7 +397,8 @@ def test_weekly_outcome_metrics_upsert_is_idempotent():
         assert len(rows) == 1
 
 
-def test_weekly_recommendation_uses_discovery_feed_for_watchlist():
+def test_weekly_recommendation_uses_discovery_feed_for_watchlist(monkeypatch):
+    monkeypatch.setenv("DISCOVERY_WATCHLIST_PROMOTION_SCORE", "30")
     engine = create_engine("sqlite:///:memory:")
     as_of = datetime.date(2025, 2, 28)
     with Session(engine) as session:
@@ -436,6 +437,12 @@ def test_weekly_recommendation_uses_discovery_feed_for_watchlist():
         save_advisor_portfolio_snapshot(as_of_date=as_of, positions=positions, snapshot_type="executed", session=session)
 
         discovery = run_discovery_scan(
+            as_of_date=as_of,
+            data_snapshot_hash=snapshot_hash,
+            experiment_id=experiment_id,
+            session=session,
+        )
+        run_discovery_scan(
             as_of_date=as_of,
             data_snapshot_hash=snapshot_hash,
             experiment_id=experiment_id,

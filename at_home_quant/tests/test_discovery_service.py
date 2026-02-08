@@ -1,7 +1,6 @@
 import datetime
 
 import pandas as pd
-import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
@@ -115,7 +114,8 @@ def test_discovery_scan_excludes_benchmark_etfs():
         assert "VMID" not in symbols
 
 
-def test_discovery_watchlist_excludes_current_holdings():
+def test_discovery_watchlist_excludes_current_holdings(monkeypatch):
+    monkeypatch.setenv("DISCOVERY_WATCHLIST_PROMOTION_SCORE", "30")
     engine = create_engine("sqlite:///:memory:")
     as_of = datetime.date(2025, 2, 28)
     with Session(engine) as session:
@@ -131,6 +131,7 @@ def test_discovery_watchlist_excludes_current_holdings():
             snapshot_type="executed",
             session=session,
         )
+        run_discovery_scan(as_of_date=as_of, session=session)
         run_discovery_scan(as_of_date=as_of, session=session)
         watchlist = get_discovery_watchlist(as_of_date=as_of, limit=10, session=session)
         assert watchlist
@@ -148,3 +149,20 @@ def test_discovery_scan_respects_min_history_filter(monkeypatch):
         assert report.candidate_count == 0
         excluded = report.summary.get("excluded_counts", {})
         assert excluded.get("insufficient_history", 0) > 0
+
+
+def test_discovery_low_confidence_flag_softens_delta(monkeypatch):
+    monkeypatch.setenv("DISCOVERY_MIN_CONFIDENCE_POOL", "20")
+    monkeypatch.setenv("DISCOVERY_SCORE_DELTA_CAP", "10")
+    engine = create_engine("sqlite:///:memory:")
+    as_of = datetime.date(2025, 2, 28)
+    with Session(engine) as session:
+        _seed_prices(session, as_of)
+        first = run_discovery_scan(as_of_date=as_of, session=session)
+        second = run_discovery_scan(as_of_date=as_of, session=session)
+        assert first.status == "succeeded"
+        assert second.status == "succeeded"
+        assert bool(second.summary.get("low_confidence", False))
+        capped_candidates = [candidate for candidate in second.candidates if candidate.score_delta is not None]
+        assert capped_candidates
+        assert all(abs(float(candidate.score_delta)) <= 10.0 for candidate in capped_candidates)

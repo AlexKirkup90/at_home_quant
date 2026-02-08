@@ -49,6 +49,10 @@ Data mode and health-gate controls:
 - `DISCOVERY_MIN_HISTORY_DAYS=252` (minimum history required for discovery eligibility).
 - `DISCOVERY_MIN_ADV_USD=5000000` (minimum ADV required for discovery eligibility).
 - `DISCOVERY_WATCHLIST_LIMIT=5` (max discovery names fed into Weekly Advisor watchlist).
+- `DISCOVERY_MIN_CONFIDENCE_POOL=10` (below this eligible pool size, discovery marks run as low-confidence and softens score deltas).
+- `DISCOVERY_SCORE_DELTA_CAP=25` (absolute cap applied to score-delta values).
+- `DISCOVERY_WATCHLIST_PROMOTION_SCORE=60` (minimum score for watchlist promotion).
+- `DISCOVERY_WATCHLIST_MIN_STABLE_RUNS=2` (consecutive runs above promotion score required before watchlist inclusion).
 - `SHOW_DEBUG_ADMIN=false` (keep Advanced tab read-only; set true to expose debug write controls).
 - `APP_ENV=dev|stage|prod` (environment context for release controls/audit logs).
 - `OPERATOR_ID=<name>` (actor identity recorded in immutable audit events).
@@ -191,7 +195,7 @@ The dashboard is organized into three primary tabs:
 - **Discovery** – run broad cross-universe discovery scans that assign each candidate a tier (`Watch Closely`, `Consider Buy`, `Strong Buy`) with normalized scores, factor-driver rationale, and risk flags.
 - **Advanced** – read-only reporting (health, regime, portfolio/risk, ranking, performance, governance). Debug/write actions are hidden unless `SHOW_DEBUG_ADMIN=true`.
 
-Discovery outputs are persisted and used as the default source for the Weekly Advisor watchlist.
+Discovery outputs are persisted and used as the default source for the Weekly Advisor watchlist, with promotion gating (score threshold + consecutive-run stability).
 
 ## Weekly Advisor Workflow (UI)
 

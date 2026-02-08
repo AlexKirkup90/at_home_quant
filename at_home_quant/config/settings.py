@@ -157,6 +157,22 @@ class Settings(BaseSettings):
         5,
         description="Default max watchlist candidates fed from discovery to weekly advisor.",
     )
+    discovery_min_confidence_pool: int = Field(
+        10,
+        description="Minimum eligible discovery candidates before confidence warnings are cleared.",
+    )
+    discovery_score_delta_cap: float = Field(
+        25.0,
+        description="Absolute cap for discovery score-delta values.",
+    )
+    discovery_watchlist_promotion_score: float = Field(
+        60.0,
+        description="Minimum discovery score required for promotion into the weekly watchlist feed.",
+    )
+    discovery_watchlist_min_stable_runs: int = Field(
+        2,
+        description="Consecutive discovery runs required above promotion score for watchlist inclusion.",
+    )
 
     class Config:
         env_file = ".env"

@@ -94,6 +94,19 @@ def _factor_contributions(item: StockFactorScores) -> tuple[list[tuple[str, floa
     )
 
 
+def _flag_to_signed_risk(flag: str) -> str:
+    normalized = flag.strip().lower()
+    if "12m momentum" in normalized:
+        return "-12m momentum"
+    if "6m momentum" in normalized:
+        return "-6m momentum"
+    if "volatility" in normalized:
+        return "-high volatility"
+    if "stability" in normalized:
+        return "-low stability"
+    return f"-{flag.lower()}"
+
+
 def _raw_discovery_signal(item: StockFactorScores) -> float:
     contributions = {
         "momentum_12m": _clip(item.momentum_12m / 0.25, -1.0, 1.0) * 30.0,
@@ -119,18 +132,34 @@ def _normalize_scores(raw_scores: list[float]) -> list[float]:
     return [_clip(score, 0.0, 100.0) for score in normalized]
 
 
+def _soften_score_delta(
+    raw_delta: float | None,
+    *,
+    eligible_pool_size: int,
+    min_confidence_pool: int,
+    cap: float,
+) -> float | None:
+    if raw_delta is None:
+        return None
+    pool_floor = max(1, min_confidence_pool)
+    confidence_scale = min(1.0, eligible_pool_size / pool_floor)
+    softened = raw_delta * confidence_scale
+    cap_value = abs(cap)
+    return _clip(softened, -cap_value, cap_value)
+
+
 def _rationale(
     item: StockFactorScores,
     flags: list[str],
 ) -> str:
     drivers, detractors = _factor_contributions(item)
-    top_drivers = [label for label, _weight in drivers[:2]]
-    top_risks = [label for label, _weight in detractors[:1]]
+    top_drivers = [f"+{label}" for label, _weight in drivers[:2]]
+    top_risks = [f"-{label}" for label, _weight in detractors[:1]]
     if not top_risks and flags:
-        top_risks = flags[:1]
-    driver_text = "mixed signals" if not top_drivers else ", ".join(top_drivers)
-    risk_text = "none flagged" if not top_risks else ", ".join(top_risks)
-    return f"Top drivers: {driver_text}. Top risk: {risk_text}."
+        top_risks = [_flag_to_signed_risk(flag) for flag in flags[:1]]
+    driver_text = "+mixed signals" if not top_drivers else ", ".join(top_drivers)
+    risk_text = "-none flagged" if not top_risks else ", ".join(top_risks)
+    return f"Top drivers: {driver_text}. Top risks: {risk_text}."
 
 
 def _symbol_market_stats(
@@ -365,9 +394,17 @@ def run_discovery_scan(
             provisional = list(candidate_map.values())
             normalized_scores = _normalize_scores([item["raw_score"] for item in provisional])
             merged_candidates: list[DiscoveryCandidateItem] = []
+            eligible_pool_size = len(provisional)
+            low_confidence = eligible_pool_size < settings.discovery_min_confidence_pool
             for item, normalized_score in zip(provisional, normalized_scores):
                 previous = previous_scores.get(item["ticker"])
-                score_delta = None if previous is None else (normalized_score - previous)
+                raw_delta = None if previous is None else (normalized_score - previous)
+                score_delta = _soften_score_delta(
+                    raw_delta,
+                    eligible_pool_size=eligible_pool_size,
+                    min_confidence_pool=settings.discovery_min_confidence_pool,
+                    cap=settings.discovery_score_delta_cap,
+                )
                 merged_candidates.append(
                     DiscoveryCandidateItem(
                         ticker=item["ticker"],
@@ -408,6 +445,8 @@ def run_discovery_scan(
             run.candidate_count = len(selected)
             summary = _run_summary(selected)
             summary["excluded_counts"] = excluded_counts
+            summary["eligible_pool_size"] = eligible_pool_size
+            summary["low_confidence"] = low_confidence
             run.summary_json = json.dumps(summary)
             run.error_message = None
             append_audit_event(
@@ -475,19 +514,85 @@ def get_discovery_watchlist(
 ) -> list[DiscoveryCandidateItem]:
     exclude = {symbol.upper() for symbol in (exclude_symbols or set())}
 
+    def _has_watchlist_promotion_stability(
+        session_obj: Session,
+        *,
+        ticker: str,
+        as_of_date: datetime.date,
+        required_runs: int,
+        min_score: float,
+    ) -> bool:
+        if required_runs <= 1:
+            return True
+        run_ids = session_obj.execute(
+            select(DiscoveryRun.id)
+            .where(
+                DiscoveryRun.status == "succeeded",
+                DiscoveryRun.as_of_date <= as_of_date,
+            )
+            .order_by(DiscoveryRun.as_of_date.desc(), DiscoveryRun.created_at.desc())
+            .limit(required_runs)
+        ).scalars().all()
+        if len(run_ids) < required_runs:
+            return False
+        for run_id in run_ids:
+            score = session_obj.execute(
+                select(DiscoveryCandidate.discovery_score).where(
+                    DiscoveryCandidate.run_id == run_id,
+                    DiscoveryCandidate.ticker == ticker,
+                )
+            ).scalar_one_or_none()
+            if score is None or float(score) < min_score:
+                return False
+        return True
+
     def _get(session_obj: Session) -> list[DiscoveryCandidateItem]:
         settings = get_settings()
-        report = get_latest_discovery_report(as_of_date=as_of_date, limit=200, session=session_obj)
-        if report is None or report.status != "succeeded":
+        latest_run = session_obj.execute(
+            select(DiscoveryRun)
+            .where(
+                DiscoveryRun.status == "succeeded",
+                DiscoveryRun.as_of_date <= as_of_date,
+            )
+            .order_by(DiscoveryRun.as_of_date.desc(), DiscoveryRun.created_at.desc())
+        ).scalars().first()
+        if latest_run is None:
             return []
+        candidate_rows = session_obj.execute(
+            select(DiscoveryCandidate)
+            .where(DiscoveryCandidate.run_id == latest_run.id)
+            .order_by(DiscoveryCandidate.discovery_score.desc(), DiscoveryCandidate.ticker.asc())
+        ).scalars().all()
         filtered: list[DiscoveryCandidateItem] = []
         result_limit = max(1, min(limit, settings.discovery_watchlist_limit))
-        for item in report.candidates:
-            if item.ticker.upper() in exclude:
+        for row in candidate_rows:
+            if row.ticker.upper() in exclude:
                 continue
-            if item.is_current_holding:
+            if bool(row.is_current_holding):
                 continue
-            filtered.append(item)
+            if float(row.discovery_score) < settings.discovery_watchlist_promotion_score:
+                continue
+            if not _has_watchlist_promotion_stability(
+                session_obj,
+                ticker=row.ticker,
+                as_of_date=as_of_date,
+                required_runs=settings.discovery_watchlist_min_stable_runs,
+                min_score=settings.discovery_watchlist_promotion_score,
+            ):
+                continue
+            filtered.append(
+                DiscoveryCandidateItem(
+                    ticker=row.ticker,
+                    source_universe=row.source_universe,
+                    composite_score=float(row.composite_score),
+                    discovery_score=float(row.discovery_score),
+                    tier=row.tier,
+                    rationale=row.rationale,
+                    risk_flags=_deserialize_risk_flags(row.risk_flags_json),
+                    score_delta=(None if row.score_delta is None else float(row.score_delta)),
+                    is_current_holding=bool(row.is_current_holding),
+                )
+            )
             if len(filtered) >= result_limit:
                 break
         return filtered

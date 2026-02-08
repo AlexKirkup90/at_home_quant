@@ -541,11 +541,19 @@ def show_weekly_advisor_section() -> None:
     else:
         watch_df = pd.DataFrame([asdict(item) for item in report.watchlist])
         if "composite_score" in watch_df.columns:
-            watch_df["composite_score"] = watch_df["composite_score"].map(lambda value: f"{float(value):.1f}")
+            watch_df = watch_df.rename(columns={"composite_score": "score"})
+            watch_df["score"] = watch_df["score"].map(lambda value: f"{float(value):.1f}")
         if "score_delta" in watch_df.columns:
             watch_df["score_delta"] = watch_df["score_delta"].map(
                 lambda value: "" if pd.isna(value) else f"{float(value):+.1f}"
             )
+        preferred_columns = [
+            column
+            for column in ["ticker", "tier", "score", "score_delta", "source_universe", "reason"]
+            if column in watch_df.columns
+        ]
+        if preferred_columns:
+            watch_df = watch_df[preferred_columns]
         st.dataframe(watch_df, width="stretch", hide_index=True)
 
     st.markdown("**Decision Outcome Attribution**")
@@ -746,6 +754,22 @@ def show_discovery_section() -> None:
     if tier_counts:
         tier_line = " | ".join(f"{tier}: {count}" for tier, count in sorted(tier_counts.items()))
         st.caption("Tier mix: " + tier_line)
+    if isinstance(report.summary, dict):
+        eligible_pool = report.summary.get("eligible_pool_size")
+        low_confidence = bool(report.summary.get("low_confidence", False))
+        excluded_counts = report.summary.get("excluded_counts", {})
+        if eligible_pool is not None:
+            st.caption(f"Eligible pool size: {eligible_pool}")
+        if excluded_counts:
+            excluded_line = " | ".join(
+                f"{key}: {value}" for key, value in sorted(excluded_counts.items())
+            )
+            st.caption("Excluded by filter: " + excluded_line)
+        if low_confidence:
+            st.warning(
+                "Low-confidence run: eligible discovery pool is below target. "
+                "Score deltas are softened and promotions may be delayed."
+            )
     if report.status != "succeeded":
         st.warning(report.error_message or "Latest discovery run is not successful.")
         return
@@ -774,7 +798,6 @@ def show_discovery_section() -> None:
                 "discovery_score": item.discovery_score,
                 "score_delta": item.score_delta,
                 "source_universe": item.source_universe,
-                "composite_score": item.composite_score,
                 "risk_flags": ", ".join(item.risk_flags) if item.risk_flags else "",
                 "rationale": item.rationale,
                 "is_current_holding": item.is_current_holding,
@@ -786,10 +809,26 @@ def show_discovery_section() -> None:
 
     discovery_df = pd.DataFrame(rows)
     discovery_df["discovery_score"] = discovery_df["discovery_score"].map(lambda value: f"{float(value):.1f}")
-    discovery_df["composite_score"] = discovery_df["composite_score"].map(lambda value: f"{float(value):.3f}")
     discovery_df["score_delta"] = discovery_df["score_delta"].map(
         lambda value: "" if pd.isna(value) else f"{float(value):+.1f}"
     )
+    discovery_df = discovery_df.rename(columns={"score_delta": "score_delta_adj"})
+    preferred_columns = [
+        column
+        for column in [
+            "ticker",
+            "tier",
+            "discovery_score",
+            "score_delta_adj",
+            "source_universe",
+            "risk_flags",
+            "rationale",
+            "is_current_holding",
+        ]
+        if column in discovery_df.columns
+    ]
+    if preferred_columns:
+        discovery_df = discovery_df[preferred_columns]
     st.dataframe(discovery_df, width="stretch", hide_index=True)
 
 

@@ -31,7 +31,7 @@ from at_home_quant.data.tickers import (
     canonical_symbol,
     equivalent_symbols,
 )
-from at_home_quant.discovery.service import get_discovery_watchlist
+from at_home_quant.discovery.service import get_discovery_watchlist, get_latest_discovery_report
 from at_home_quant.db import crud
 from at_home_quant.db.models import (
     AdvisorPortfolioSnapshot,
@@ -353,12 +353,17 @@ def _build_watchlist(
     session: Session,
 ) -> list[AdvisorWatchItem]:
     target_equities = {p.ticker for p in target_portfolio.positions if p.asset_type == "equity"}
+    latest_discovery = get_latest_discovery_report(as_of_date=as_of_date, limit=1, session=session)
     discovery_watchlist = get_discovery_watchlist(
         as_of_date=as_of_date,
         limit=5,
         exclude_symbols=target_equities,
         session=session,
     )
+    # If discovery is available but no names are promoted yet, keep watchlist empty
+    # instead of falling back to raw rank-near-cutoff names.
+    if latest_discovery is not None and latest_discovery.status == "succeeded" and not discovery_watchlist:
+        return []
     if discovery_watchlist:
         items: list[AdvisorWatchItem] = []
         for candidate in discovery_watchlist:
