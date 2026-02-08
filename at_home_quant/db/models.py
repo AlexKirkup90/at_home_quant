@@ -268,6 +268,18 @@ class ModelRelease(Base):
     notes = Column(Text, nullable=True)
 
 
+class ReleaseGateRun(Base):
+    __tablename__ = "release_gate_runs"
+
+    id = Column(Integer, primary_key=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow, index=True)
+    environment = Column(String, nullable=False, index=True)
+    gate_name = Column(String, nullable=False, index=True)
+    status = Column(String, nullable=False, index=True)  # passed|failed
+    code_hash = Column(String, nullable=True, index=True)
+    details_json = Column(Text, nullable=False, default="{}")
+
+
 __all__ = [
     "Base",
     "Ticker",
@@ -288,4 +300,5 @@ __all__ = [
     "BacktestExperimentLink",
     "AuditEvent",
     "ModelRelease",
+    "ReleaseGateRun",
 ]

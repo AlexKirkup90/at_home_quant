@@ -49,8 +49,12 @@ Data mode and health-gate controls:
 - `APP_ENV=dev|stage|prod` (environment context for release controls/audit logs).
 - `OPERATOR_ID=<name>` (actor identity recorded in immutable audit events).
 - `OPERATOR_ROLE=viewer|analyst|approver|admin` (role for release RBAC checks).
-- `ENFORCE_RBAC=true|false` (enforce role checks for release actions).
+- `ENFORCE_RBAC=true|false` (kept for compatibility; release actions are now RBAC enforced by role).
 - `REQUIRE_RELEASE_APPROVAL_STAGE_PROD=true|false` (force approval before stage/prod activation).
+- `REQUIRE_PROD_RELEASE_CONTROLS=true|false` (if true, prod backend run requires fresh passed release gate + active model release).
+- `REQUIRED_ACTIVE_MODEL_NAME=weekly_quant_v1` (model release name required for prod backend runs).
+- `PROD_GATE_MAX_AGE_HOURS=24` (max age for valid production gate artifact).
+- `REQUIRE_GATE_CODE_HASH_MATCH=true|false` (enforce gate artifact hash == current code hash in prod).
 
 3. **Run the initial historical ETL**
 
@@ -306,6 +310,9 @@ Quick mode:
 ```bash
 python -m at_home_quant.scripts.run_release_gates --quick
 ```
+
+Each run now records an immutable gate artifact in `release_gate_runs` (env, status, code hash, details).  
+Production backend runs (`APP_ENV=prod`) are blocked unless a recent passed `release_gates` artifact exists and an active release exists for `REQUIRED_ACTIVE_MODEL_NAME`.
 
 ### 4) Incident/rollback runbook
 

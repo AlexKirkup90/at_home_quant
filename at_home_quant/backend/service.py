@@ -21,6 +21,7 @@ from at_home_quant.db.session import get_session, init_db
 from at_home_quant.etl.daily_update import run_daily_update
 from at_home_quant.etl.fundamentals_update import run_fundamentals_update
 from at_home_quant.ops.audit import append_audit_event
+from at_home_quant.ops.gates import assert_production_run_controls
 from at_home_quant.research.registry import complete_experiment, register_experiment
 
 
@@ -171,6 +172,8 @@ def run_backend_pipeline(
     for attempt in range(1, retries + 2):
         attempt_experiment_id: int | None = None
         try:
+            with get_session() as session:
+                assert_production_run_controls(session=session, environment=settings.app_env)
             run_daily_update()
             with get_session() as session:
                 run = session.execute(select(BackendRun).where(BackendRun.id == run_id)).scalars().one()

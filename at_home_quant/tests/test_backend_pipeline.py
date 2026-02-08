@@ -229,3 +229,46 @@ def test_run_backend_pipeline_preserves_root_error_when_experiment_finalize_fail
         assert False, "Expected backend pipeline to raise root cause error."
     except RuntimeError as exc:
         assert "root cause failure" in str(exc)
+
+
+def test_run_backend_pipeline_prod_requires_release_controls(monkeypatch):
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    with Session(engine) as session:
+        _seed_prices(session, datetime.date(2025, 2, 28))
+
+    def session_override():
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _ctx():
+            with Session(engine) as session:
+                try:
+                    yield session
+                    session.commit()
+                except Exception:
+                    session.rollback()
+                    raise
+
+        return _ctx()
+
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setenv("REQUIRE_PROD_RELEASE_CONTROLS", "true")
+    monkeypatch.setenv("REQUIRE_GATE_CODE_HASH_MATCH", "false")
+    monkeypatch.setattr(backend_service_module, "get_session", session_override)
+    monkeypatch.setattr(backend_service_module, "init_db", lambda: None)
+    monkeypatch.setattr(backend_service_module, "run_daily_update", lambda: None)
+    monkeypatch.setattr(backend_service_module, "run_fundamentals_update", lambda **_kwargs: 0)
+
+    try:
+        backend_service_module.run_backend_pipeline(
+            as_of_date=datetime.date(2025, 2, 28),
+            include_weekly_recommendation=False,
+            retries=0,
+        )
+        assert False, "Expected production controls to block run."
+    except Exception as exc:  # noqa: BLE001
+        assert "no passed gate artifact" in str(exc)

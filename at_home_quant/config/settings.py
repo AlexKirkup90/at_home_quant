@@ -23,12 +23,28 @@ class Settings(BaseSettings):
         description="Operator role used by release-workflow RBAC checks.",
     )
     enforce_rbac: bool = Field(
-        False,
+        True,
         description="If true, release actions are permission-checked by role.",
     )
     require_release_approval_stage_prod: bool = Field(
         True,
         description="If true, stage/prod model releases must be approved before activation.",
+    )
+    require_prod_release_controls: bool = Field(
+        True,
+        description="If true, production backend runs require a recent passed gate artifact and active release.",
+    )
+    required_active_model_name: str = Field(
+        "weekly_quant_v1",
+        description="Model name that must have an active release in production runs.",
+    )
+    prod_gate_max_age_hours: int = Field(
+        24,
+        description="Maximum age in hours for the latest passed release gate artifact in production.",
+    )
+    require_gate_code_hash_match: bool = Field(
+        True,
+        description="If true, production runs require gate artifact code hash to match current code hash.",
     )
     default_start_date: datetime.date = Field(
         datetime.date(2000, 1, 1), description="Default start date for history fetches"

@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import json
 import pathlib
 import re
 import subprocess
 import sys
 from dataclasses import dataclass
+
+from at_home_quant.config.settings import get_settings
+from at_home_quant.db.session import get_session, init_db
+from at_home_quant.ops.gates import record_release_gate_run
+from at_home_quant.research.registry import code_hash
 
 
 @dataclass
@@ -49,8 +55,11 @@ def _security_scan(root: pathlib.Path) -> GateResult:
 
 
 def main() -> None:
+    settings = get_settings()
     parser = argparse.ArgumentParser(description="Run release gates for production promotion.")
     parser.add_argument("--quick", action="store_true", help="Run a reduced gate set.")
+    parser.add_argument("--env", choices=["dev", "stage", "prod"], default=settings.app_env)
+    parser.add_argument("--gate-name", default="release_gates")
     args = parser.parse_args()
 
     gates: list[GateResult] = []
@@ -86,6 +95,33 @@ def main() -> None:
         if not gate.ok:
             print(gate.detail)
             print("-" * 60)
+    run_status = "failed" if failed else "passed"
+    init_db()
+    with get_session() as session:
+        recorded = record_release_gate_run(
+            session,
+            environment=args.env,
+            gate_name=args.gate_name,
+            status=run_status,
+            code_hash_value=code_hash(),
+            details={
+                "quick": args.quick,
+                "results": [{"name": gate.name, "ok": gate.ok, "detail": gate.detail} for gate in gates],
+            },
+        )
+        print(
+            "gate artifact recorded: "
+            + json.dumps(
+                {
+                    "id": recorded.id,
+                    "environment": recorded.environment,
+                    "gate_name": recorded.gate_name,
+                    "status": recorded.status,
+                    "code_hash": recorded.code_hash,
+                }
+            )
+        )
+
     if failed:
         sys.exit(1)
     print("All release gates passed.")
