@@ -235,6 +235,39 @@ class BacktestExperimentLink(Base):
     experiment_id = Column(Integer, ForeignKey("experiment_runs.id"), nullable=False, index=True)
 
 
+class AuditEvent(Base):
+    __tablename__ = "audit_events"
+
+    id = Column(Integer, primary_key=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow, index=True)
+    actor = Column(String, nullable=False, index=True)
+    environment = Column(String, nullable=False, index=True)
+    event_type = Column(String, nullable=False, index=True)
+    entity_type = Column(String, nullable=True, index=True)
+    entity_id = Column(String, nullable=True, index=True)
+    payload_json = Column(Text, nullable=False, default="{}")
+    prev_hash = Column(String, nullable=True, index=True)
+    event_hash = Column(String, nullable=False, unique=True, index=True)
+
+
+class ModelRelease(Base):
+    __tablename__ = "model_releases"
+
+    id = Column(Integer, primary_key=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow, index=True)
+    updated_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow, index=True)
+    model_name = Column(String, nullable=False, index=True)
+    environment = Column(String, nullable=False, index=True)
+    experiment_id = Column(Integer, ForeignKey("experiment_runs.id"), nullable=False, index=True)
+    status = Column(String, nullable=False, default="proposed", index=True)
+    proposed_by = Column(String, nullable=False, index=True)
+    approved_by = Column(String, nullable=True, index=True)
+    approved_at = Column(DateTime, nullable=True, index=True)
+    activated_at = Column(DateTime, nullable=True, index=True)
+    deactivated_at = Column(DateTime, nullable=True, index=True)
+    notes = Column(Text, nullable=True)
+
+
 __all__ = [
     "Base",
     "Ticker",
@@ -253,4 +286,6 @@ __all__ = [
     "ExperimentRun",
     "WeeklyRecommendationExperimentLink",
     "BacktestExperimentLink",
+    "AuditEvent",
+    "ModelRelease",
 ]

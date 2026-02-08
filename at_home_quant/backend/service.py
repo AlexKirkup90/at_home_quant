@@ -20,6 +20,7 @@ from at_home_quant.db.models import BackendRun, DataLayerPrice, DatasetSnapshot,
 from at_home_quant.db.session import get_session, init_db
 from at_home_quant.etl.daily_update import run_daily_update
 from at_home_quant.etl.fundamentals_update import run_fundamentals_update
+from at_home_quant.ops.audit import append_audit_event
 from at_home_quant.research.registry import complete_experiment, register_experiment
 
 
@@ -151,6 +152,19 @@ def run_backend_pipeline(
         session.add(run)
         session.flush()
         run_id = run.id
+        LOGGER.info(
+            "backend_run_started run_id=%s as_of=%s include_weekly=%s",
+            run_id,
+            as_of_date,
+            include_weekly_recommendation,
+        )
+        append_audit_event(
+            session,
+            event_type="backend_run_started",
+            entity_type="backend_run",
+            entity_id=str(run_id),
+            payload={"as_of_date": (as_of_date.isoformat() if as_of_date else None)},
+        )
 
     last_error: Exception | None = None
     experiment_id: int | None = None
@@ -261,6 +275,24 @@ def run_backend_pipeline(
                     + " | required_symbols="
                     + ",".join(required_symbols)
                 )
+                LOGGER.info(
+                    "backend_run_succeeded run_id=%s as_of=%s snapshot=%s",
+                    run_id,
+                    resolved_as_of,
+                    feature_snapshot.snapshot_hash,
+                )
+                append_audit_event(
+                    session,
+                    event_type="backend_run_succeeded",
+                    entity_type="backend_run",
+                    entity_id=str(run_id),
+                    payload={
+                        "as_of_date": resolved_as_of.isoformat(),
+                        "data_snapshot_hash": feature_snapshot.snapshot_hash,
+                        "recommendation_batch_id": recommendation_batch_id,
+                        "experiment_id": experiment_id,
+                    },
+                )
 
                 return BackendPipelineResult(
                     run_id=run_id,
@@ -303,6 +335,14 @@ def run_backend_pipeline(
         run.status = "failed"
         run.finished_at = datetime.datetime.utcnow()
         run.message = str(last_error) if last_error else "Unknown backend pipeline failure."
+        LOGGER.error("backend_run_failed run_id=%s error=%s", run_id, run.message)
+        append_audit_event(
+            session,
+            event_type="backend_run_failed",
+            entity_type="backend_run",
+            entity_id=str(run_id),
+            payload={"error": (str(last_error) if last_error else "Unknown backend pipeline failure.")},
+        )
         if experiment_id is not None:
             try:
                 complete_experiment(

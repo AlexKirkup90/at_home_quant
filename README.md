@@ -46,6 +46,11 @@ Data mode and health-gate controls:
 - `WEIGHT_ROUNDING_PCT=1.0` (round target weights to practical increments).
 - `ENABLE_TRADE_GATING=true` (cost-aware gate to suppress low-signal over-trading).
 - `SHOW_DEBUG_ADMIN=false` (keep Advanced tab read-only; set true to expose debug write controls).
+- `APP_ENV=dev|stage|prod` (environment context for release controls/audit logs).
+- `OPERATOR_ID=<name>` (actor identity recorded in immutable audit events).
+- `OPERATOR_ROLE=viewer|analyst|approver|admin` (role for release RBAC checks).
+- `ENFORCE_RBAC=true|false` (enforce role checks for release actions).
+- `REQUIRE_RELEASE_APPROVAL_STAGE_PROD=true|false` (force approval before stage/prod activation).
 
 3. **Run the initial historical ETL**
 
@@ -249,3 +254,63 @@ This produces a registered model report with challenger comparisons (SPY/QQQ/BIL
 ## CI
 
 GitHub Actions CI runs `pytest` on pushes and pull requests (including leakage-boundary tests in research service/registry).
+
+## Production Ops & Compliance (Phase 4)
+
+Phase 4 introduces operational controls for environment-aware promotion, immutable audit logging, and release gating.
+
+### 1) Immutable audit trail
+
+Operational events now append to `audit_events` with hash chaining (`prev_hash` -> `event_hash`) so event history is tamper-evident.
+
+Examples logged:
+- backend run started/succeeded/failed
+- weekly recommendation generation
+- recommendation decisions
+- executed portfolio saves
+- model release propose/approve/activate/rollback
+
+### 2) Model release workflow
+
+Model releases are tracked in `model_releases` and linked to succeeded `experiment_runs`.
+
+CLI:
+
+```bash
+python -m at_home_quant.scripts.manage_model_release propose --model weekly_quant_v1 --env stage --experiment-id 12
+python -m at_home_quant.scripts.manage_model_release approve --release-id 3
+python -m at_home_quant.scripts.manage_model_release activate --release-id 3
+python -m at_home_quant.scripts.manage_model_release active --model weekly_quant_v1 --env stage
+python -m at_home_quant.scripts.manage_model_release rollback --model weekly_quant_v1 --env stage --target-release-id 2
+```
+
+Stage/prod activation requires approval when `REQUIRE_RELEASE_APPROVAL_STAGE_PROD=true`.
+
+### 3) Release gates
+
+Run operational promotion gates locally:
+
+```bash
+python -m at_home_quant.scripts.run_release_gates
+```
+
+Gate set includes:
+- unit/integration tests
+- data-contract tests
+- backtest regression checks
+- full-suite pass
+- secret-pattern security scan
+
+Quick mode:
+
+```bash
+python -m at_home_quant.scripts.run_release_gates --quick
+```
+
+### 4) Incident/rollback runbook
+
+For production incidents:
+1. run `active` to identify currently active release
+2. run `rollback` to previously known-good release
+3. re-run release gates
+4. log incident notes in release `notes` and audit events

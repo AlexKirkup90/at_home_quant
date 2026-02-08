@@ -6,9 +6,29 @@ from pydantic.v1 import BaseSettings, Field
 
 
 class Settings(BaseSettings):
+    app_env: Literal["dev", "stage", "prod"] = Field(
+        "dev",
+        description="Runtime environment label used for promotion controls and audit context.",
+    )
     database_url: str = Field(
         "sqlite:///./data/quant.db",
         description="SQLAlchemy database URL; defaults to local SQLite file.",
+    )
+    operator_id: str = Field(
+        "system",
+        description="Operator identity recorded in audit logs.",
+    )
+    operator_role: Literal["viewer", "analyst", "approver", "admin"] = Field(
+        "admin",
+        description="Operator role used by release-workflow RBAC checks.",
+    )
+    enforce_rbac: bool = Field(
+        False,
+        description="If true, release actions are permission-checked by role.",
+    )
+    require_release_approval_stage_prod: bool = Field(
+        True,
+        description="If true, stage/prod model releases must be approved before activation.",
     )
     default_start_date: datetime.date = Field(
         datetime.date(2000, 1, 1), description="Default start date for history fetches"

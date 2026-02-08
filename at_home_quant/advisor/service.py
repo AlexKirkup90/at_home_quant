@@ -48,6 +48,7 @@ from at_home_quant.portfolio.models import RebalanceInstruction, TargetPortfolio
 from at_home_quant.portfolio.rebalance import diff_portfolios
 from at_home_quant.portfolio.service import build_monthly_portfolio
 from at_home_quant.regime.service import get_current_regime
+from at_home_quant.ops.audit import append_audit_event
 from at_home_quant.selection.service import rank_universe
 from at_home_quant.research.registry import link_weekly_batch_to_experiment, require_experiment
 
@@ -514,6 +515,18 @@ def generate_weekly_recommendation(
         )
         batch.watchlist_json = json.dumps([asdict(item) for item in watchlist])
         session_obj.flush()
+        append_audit_event(
+            session_obj,
+            event_type="weekly_recommendation_generated",
+            entity_type="weekly_batch",
+            entity_id=str(batch.id),
+            payload={
+                "as_of_date": as_of_date.isoformat(),
+                "best_universe": regime.best_universe,
+                "recommendation_count": len(recommendations),
+                "experiment_id": experiment_id,
+            },
+        )
 
         return WeeklyAdvisorReport(
             batch_id=batch.id,
@@ -669,11 +682,21 @@ def log_decision(
                 updated_at=now,
             )
             session_obj.add(row)
-            return
-        existing.decision = decision_input.decision
-        existing.executed_weight = decision_input.executed_weight
-        existing.note = decision_input.note
-        existing.updated_at = now
+        else:
+            existing.decision = decision_input.decision
+            existing.executed_weight = decision_input.executed_weight
+            existing.note = decision_input.note
+            existing.updated_at = now
+        append_audit_event(
+            session_obj,
+            event_type="recommendation_decision_logged",
+            entity_type="recommendation_item",
+            entity_id=str(decision_input.item_id),
+            payload={
+                "decision": decision_input.decision,
+                "executed_weight": decision_input.executed_weight,
+            },
+        )
 
     if session is not None:
         _log(session)
@@ -924,6 +947,19 @@ def save_executed_from_decisions(
             session=session_obj,
         )
         batch.status = "closed"
+        append_audit_event(
+            session_obj,
+            event_type="executed_portfolio_saved",
+            entity_type="weekly_batch",
+            entity_id=str(batch.id),
+            payload={
+                "as_of_date": batch.as_of_date.isoformat(),
+                "followed": followed,
+                "ignored": ignored,
+                "partial": partial,
+                "position_count": len(positions),
+            },
+        )
         return ExecutedPortfolioFromDecisions(
             as_of_date=batch.as_of_date,
             positions=positions,
