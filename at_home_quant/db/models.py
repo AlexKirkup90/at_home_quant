@@ -145,6 +145,33 @@ class RecommendationDecision(Base):
     note = Column(Text, nullable=True)
 
 
+class WeeklyOutcomeMetric(Base):
+    __tablename__ = "weekly_outcome_metrics"
+    __table_args__ = (UniqueConstraint("batch_id", "horizon_days", name="uq_weekly_outcome_batch_horizon"),)
+
+    id = Column(Integer, primary_key=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow, index=True)
+    updated_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow, index=True)
+    batch_id = Column(Integer, ForeignKey("weekly_recommendation_batches.id"), nullable=False, index=True)
+    as_of_date = Column(Date, nullable=False, index=True)
+    evaluation_date = Column(Date, nullable=False, index=True)
+    horizon_days = Column(Integer, nullable=False, index=True)
+    item_count = Column(Integer, nullable=False, default=0)
+    model_active_return = Column(Float, nullable=False, default=0.0)
+    decision_active_return = Column(Float, nullable=False, default=0.0)
+    decision_alpha = Column(Float, nullable=False, default=0.0)
+    follow_hit_rate = Column(Float, nullable=True)
+    ignored_positive_count = Column(Integer, nullable=False, default=0)
+    model_portfolio_return = Column(Float, nullable=True)
+    decision_portfolio_return = Column(Float, nullable=True)
+    benchmark_return = Column(Float, nullable=True)
+    model_vs_benchmark = Column(Float, nullable=True)
+    decision_vs_benchmark = Column(Float, nullable=True)
+    model_implementation_shortfall = Column(Float, nullable=False, default=0.0)
+    decision_implementation_shortfall = Column(Float, nullable=False, default=0.0)
+    shortfall_gap = Column(Float, nullable=False, default=0.0)
+
+
 class BackendRun(Base):
     __tablename__ = "backend_runs"
 
@@ -292,6 +319,7 @@ __all__ = [
     "WeeklyRecommendationBatch",
     "WeeklyRecommendationItem",
     "RecommendationDecision",
+    "WeeklyOutcomeMetric",
     "BackendRun",
     "DatasetSnapshot",
     "DataLayerPrice",

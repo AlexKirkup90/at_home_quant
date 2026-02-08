@@ -32,11 +32,12 @@ from at_home_quant.backend.service import run_backend_pipeline
 from at_home_quant.advisor.models import WorkflowDecisionInput
 from at_home_quant.advisor.service import (
     get_latest_advisor_portfolio,
-    get_weekly_outcome_report,
+    get_weekly_outcome_trend,
     get_latest_weekly_report,
     log_decision,
     save_advisor_portfolio_snapshot,
     save_executed_from_decisions,
+    upsert_weekly_outcome_metrics,
 )
 from at_home_quant.research.service import run_walk_forward_experiment
 from at_home_quant.data.tickers import Universe
@@ -548,7 +549,7 @@ def show_weekly_advisor_section() -> None:
         key="weekly_outcome_horizon_days",
     )
     try:
-        outcome_report = get_weekly_outcome_report(
+        outcome_report = upsert_weekly_outcome_metrics(
             batch_id=report.batch_id,
             horizon_days=outcome_horizon_days,
         )
@@ -589,6 +590,52 @@ def show_weekly_advisor_section() -> None:
         ]:
             outcome_df[column] = outcome_df[column].map(lambda value: f"{float(value) * 100:.2f}%")
         st.dataframe(outcome_df, width="stretch", hide_index=True)
+
+    trend_report = get_weekly_outcome_trend(
+        horizon_days=outcome_horizon_days,
+        lookback=12,
+        rolling_window=4,
+    )
+    if trend_report.points:
+        st.markdown("**Weekly Decision Quality Trend (last 12 completed batches)**")
+        trend_df = pd.DataFrame(
+            [
+                {
+                    "as_of_date": point.as_of_date,
+                    "decision_alpha": point.decision_alpha,
+                    "shortfall_gap": point.shortfall_gap,
+                    "follow_hit_rate": point.follow_hit_rate,
+                    "decision_vs_benchmark": point.decision_vs_benchmark,
+                }
+                for point in trend_report.points
+            ]
+        )
+        chart_df = trend_df.copy()
+        chart_df["as_of_date"] = pd.to_datetime(chart_df["as_of_date"])
+        chart_df = chart_df.set_index("as_of_date")
+        st.line_chart(
+            chart_df[
+                [
+                    "decision_alpha",
+                    "shortfall_gap",
+                    "decision_vs_benchmark",
+                ]
+            ],
+            width="stretch",
+        )
+        display_df = trend_df.copy()
+        for column in ["decision_alpha", "shortfall_gap", "follow_hit_rate", "decision_vs_benchmark"]:
+            display_df[column] = display_df[column].map(
+                lambda value: "" if pd.isna(value) else f"{float(value) * 100:.2f}%"
+            )
+        st.dataframe(display_df, width="stretch", hide_index=True)
+
+        if trend_report.flag_negative_decision_alpha_streak:
+            st.error("Degradation flag: decision alpha was negative for the last 4 completed batches.")
+        if trend_report.flag_negative_rolling_decision_alpha:
+            st.warning("Degradation flag: the 4-batch average decision alpha is below zero.")
+        if trend_report.flag_rising_shortfall_gap:
+            st.warning("Degradation flag: implementation shortfall gap is rising across the latest 4-batch window.")
 
 
 def show_onboarding_section() -> None:

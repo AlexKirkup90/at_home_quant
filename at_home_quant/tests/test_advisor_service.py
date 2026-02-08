@@ -2,21 +2,30 @@ import datetime
 
 import pandas as pd
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from at_home_quant.advisor.models import WorkflowDecisionInput
 from at_home_quant.advisor.service import (
     generate_weekly_recommendation,
     get_latest_advisor_portfolio,
+    get_weekly_outcome_trend,
     get_weekly_outcome_report,
     get_latest_weekly_report,
     log_decision,
     save_advisor_portfolio_snapshot,
     save_executed_from_decisions,
+    upsert_weekly_outcome_metrics,
 )
 from at_home_quant.data.tickers import BENCHMARKS, SAMPLE_NASDAQ100, TickerInfo, TickerType
-from at_home_quant.db.models import Base, DatasetSnapshot, PriceDaily, Ticker
+from at_home_quant.db.models import (
+    Base,
+    DatasetSnapshot,
+    PriceDaily,
+    Ticker,
+    WeeklyOutcomeMetric,
+    WeeklyRecommendationBatch,
+)
 from at_home_quant.portfolio.models import TargetPosition
 from at_home_quant.research.registry import register_experiment
 
@@ -344,3 +353,91 @@ def test_weekly_outcome_report_computes_decision_alpha():
         assert isinstance(outcome.decision_alpha, float)
         assert outcome.model_implementation_shortfall >= 0
         assert outcome.decision_implementation_shortfall >= 0
+
+
+def test_weekly_outcome_metrics_upsert_is_idempotent():
+    engine = create_engine("sqlite:///:memory:")
+    as_of = datetime.date(2025, 2, 20)
+    future_end = datetime.date(2025, 2, 28)
+    with Session(engine) as session:
+        _seed_prices(session, future_end)
+        snapshot_hash = "e" * 64
+        _seed_feature_snapshot(session, as_of, snapshot_hash)
+        experiment_id = _seed_experiment(session, as_of, snapshot_hash)
+        positions = [
+            TargetPosition("AAPL", 0.40, "equity"),
+            TargetPosition("MSFT", 0.35, "equity"),
+            TargetPosition("GLD", 0.10, "gold"),
+            TargetPosition("BIL", 0.15, "cash"),
+        ]
+        save_advisor_portfolio_snapshot(as_of_date=as_of, positions=positions, snapshot_type="baseline", session=session)
+        save_advisor_portfolio_snapshot(as_of_date=as_of, positions=positions, snapshot_type="executed", session=session)
+
+        report = generate_weekly_recommendation(
+            as_of_date=as_of,
+            top_n=2,
+            data_snapshot_hash=snapshot_hash,
+            experiment_id=experiment_id,
+            session=session,
+        )
+        first = upsert_weekly_outcome_metrics(batch_id=report.batch_id, horizon_days=7, session=session)
+        second = upsert_weekly_outcome_metrics(batch_id=report.batch_id, horizon_days=7, session=session)
+        assert first is not None
+        assert second is not None
+
+        rows = session.execute(
+            select(WeeklyOutcomeMetric).where(
+                WeeklyOutcomeMetric.batch_id == report.batch_id,
+                WeeklyOutcomeMetric.horizon_days == 7,
+            )
+        ).scalars().all()
+        assert len(rows) == 1
+
+
+def test_weekly_outcome_trend_flags_negative_alpha_streak():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(bind=engine)
+    as_of_dates = [datetime.date(2025, 1, 3) + datetime.timedelta(days=7 * idx) for idx in range(5)]
+    with Session(engine) as session:
+        alpha_values = [0.005, -0.01, -0.02, -0.015, -0.03]
+        shortfall_values = [0.001, 0.001, 0.001, 0.002, 0.003]
+        for idx, as_of_date in enumerate(as_of_dates):
+            batch = WeeklyRecommendationBatch(
+                as_of_date=as_of_date,
+                best_universe="NASDAQ100",
+                best_universe_score=70.0,
+                status="closed",
+                data_snapshot_hash="a" * 64,
+                watchlist_json="[]",
+            )
+            session.add(batch)
+            session.flush()
+            session.add(
+                WeeklyOutcomeMetric(
+                    batch_id=batch.id,
+                    as_of_date=as_of_date,
+                    evaluation_date=as_of_date + datetime.timedelta(days=7),
+                    horizon_days=7,
+                    item_count=10,
+                    model_active_return=0.0,
+                    decision_active_return=alpha_values[idx],
+                    decision_alpha=alpha_values[idx],
+                    follow_hit_rate=0.4,
+                    ignored_positive_count=2,
+                    model_portfolio_return=0.0,
+                    decision_portfolio_return=0.0,
+                    benchmark_return=0.0,
+                    model_vs_benchmark=0.0,
+                    decision_vs_benchmark=alpha_values[idx],
+                    model_implementation_shortfall=0.001,
+                    decision_implementation_shortfall=0.001 + shortfall_values[idx],
+                    shortfall_gap=shortfall_values[idx],
+                )
+            )
+        session.flush()
+
+        trend = get_weekly_outcome_trend(horizon_days=7, lookback=12, rolling_window=4, session=session)
+        assert len(trend.points) == 5
+        assert trend.flag_negative_decision_alpha_streak
+        assert trend.flag_negative_rolling_decision_alpha
+        assert trend.flag_rising_shortfall_gap

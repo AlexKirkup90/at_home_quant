@@ -13,8 +13,10 @@ from at_home_quant.advisor.models import (
     AdvisorWatchItem,
     ExecutedPortfolioFromDecisions,
     WeeklyAdvisorReport,
+    WeeklyOutcomeMetricPoint,
     WeeklyOutcomeItem,
     WeeklyOutcomeReport,
+    WeeklyOutcomeTrendReport,
     WorkflowDecisionInput,
 )
 from at_home_quant.config.settings import get_settings
@@ -32,6 +34,7 @@ from at_home_quant.db.models import (
     Base,
     DatasetSnapshot,
     RecommendationDecision,
+    WeeklyOutcomeMetric,
     WeeklyRecommendationExperimentLink,
     WeeklyRecommendationBatch,
     WeeklyRecommendationItem,
@@ -894,6 +897,169 @@ def get_weekly_outcome_report(
         return _get(session_obj)
 
 
+def _update_weekly_outcome_metric_row(
+    row: WeeklyOutcomeMetric,
+    report: WeeklyOutcomeReport,
+    *,
+    horizon_days: int,
+) -> bool:
+    updated = False
+    target_values = {
+        "as_of_date": report.as_of_date,
+        "evaluation_date": report.evaluation_date,
+        "horizon_days": horizon_days,
+        "item_count": len(report.items),
+        "model_active_return": report.model_active_return,
+        "decision_active_return": report.decision_active_return,
+        "decision_alpha": report.decision_alpha,
+        "follow_hit_rate": report.follow_hit_rate,
+        "ignored_positive_count": report.ignored_positive_count,
+        "model_portfolio_return": report.model_portfolio_return,
+        "decision_portfolio_return": report.decision_portfolio_return,
+        "benchmark_return": report.benchmark_return,
+        "model_vs_benchmark": report.model_vs_benchmark,
+        "decision_vs_benchmark": report.decision_vs_benchmark,
+        "model_implementation_shortfall": report.model_implementation_shortfall,
+        "decision_implementation_shortfall": report.decision_implementation_shortfall,
+        "shortfall_gap": report.shortfall_gap,
+    }
+    for field, value in target_values.items():
+        if getattr(row, field) != value:
+            setattr(row, field, value)
+            updated = True
+    if updated:
+        row.updated_at = datetime.datetime.utcnow()
+    return updated
+
+
+def upsert_weekly_outcome_metrics(
+    batch_id: int,
+    horizon_days: int = 7,
+    session: Session | None = None,
+) -> WeeklyOutcomeReport | None:
+    def _upsert(session_obj: Session) -> WeeklyOutcomeReport | None:
+        Base.metadata.create_all(bind=session_obj.bind)
+        report = get_weekly_outcome_report(
+            batch_id=batch_id,
+            horizon_days=horizon_days,
+            session=session_obj,
+        )
+        if report is None:
+            return None
+        row = session_obj.execute(
+            select(WeeklyOutcomeMetric).where(
+                WeeklyOutcomeMetric.batch_id == batch_id,
+                WeeklyOutcomeMetric.horizon_days == horizon_days,
+            )
+        ).scalars().first()
+        is_new = row is None
+        if row is None:
+            row = WeeklyOutcomeMetric(
+                batch_id=batch_id,
+                horizon_days=horizon_days,
+                as_of_date=report.as_of_date,
+                evaluation_date=report.evaluation_date,
+            )
+            session_obj.add(row)
+            session_obj.flush()
+        changed = _update_weekly_outcome_metric_row(row, report, horizon_days=horizon_days)
+        if is_new or changed:
+            append_audit_event(
+                session_obj,
+                event_type="weekly_outcome_metrics_updated",
+                entity_type="weekly_batch",
+                entity_id=str(batch_id),
+                payload={
+                    "horizon_days": horizon_days,
+                    "decision_alpha": report.decision_alpha,
+                    "item_count": len(report.items),
+                    "evaluation_date": report.evaluation_date.isoformat(),
+                },
+            )
+        return report
+
+    if session is not None:
+        return _upsert(session)
+    with get_session() as session_obj:
+        return _upsert(session_obj)
+
+
+def get_weekly_outcome_trend(
+    horizon_days: int = 7,
+    lookback: int = 12,
+    rolling_window: int = 4,
+    session: Session | None = None,
+) -> WeeklyOutcomeTrendReport:
+    lookback = max(1, lookback)
+    rolling_window = max(2, rolling_window)
+
+    def _get(session_obj: Session) -> WeeklyOutcomeTrendReport:
+        Base.metadata.create_all(bind=session_obj.bind)
+        rows = session_obj.execute(
+            select(WeeklyOutcomeMetric)
+            .where(WeeklyOutcomeMetric.horizon_days == horizon_days)
+            .order_by(WeeklyOutcomeMetric.as_of_date.desc(), WeeklyOutcomeMetric.id.desc())
+            .limit(lookback)
+        ).scalars().all()
+        ordered_rows = list(reversed(rows))
+        points = [
+            WeeklyOutcomeMetricPoint(
+                batch_id=row.batch_id,
+                as_of_date=row.as_of_date,
+                evaluation_date=row.evaluation_date,
+                horizon_days=row.horizon_days,
+                item_count=row.item_count,
+                decision_alpha=row.decision_alpha,
+                follow_hit_rate=row.follow_hit_rate,
+                shortfall_gap=row.shortfall_gap,
+                decision_vs_benchmark=row.decision_vs_benchmark,
+                model_active_return=row.model_active_return,
+                decision_active_return=row.decision_active_return,
+                model_implementation_shortfall=row.model_implementation_shortfall,
+                decision_implementation_shortfall=row.decision_implementation_shortfall,
+            )
+            for row in ordered_rows
+        ]
+
+        latest_rolling_decision_alpha = None
+        latest_rolling_shortfall_gap = None
+        flag_negative_decision_alpha_streak = False
+        flag_negative_rolling_decision_alpha = False
+        flag_rising_shortfall_gap = False
+
+        if len(points) >= rolling_window:
+            alpha_window = [point.decision_alpha for point in points[-rolling_window:]]
+            shortfall_window = [point.shortfall_gap for point in points[-rolling_window:]]
+            latest_rolling_decision_alpha = sum(alpha_window) / rolling_window
+            latest_rolling_shortfall_gap = sum(shortfall_window) / rolling_window
+            flag_negative_decision_alpha_streak = all(value < 0 for value in alpha_window)
+            flag_negative_rolling_decision_alpha = latest_rolling_decision_alpha < 0
+            if len(points) >= (rolling_window + 1):
+                previous_shortfall_window = [
+                    point.shortfall_gap for point in points[-(rolling_window + 1) : -1]
+                ]
+                previous_shortfall = sum(previous_shortfall_window) / rolling_window
+                flag_rising_shortfall_gap = (
+                    latest_rolling_shortfall_gap > 0 and latest_rolling_shortfall_gap > previous_shortfall
+                )
+
+        return WeeklyOutcomeTrendReport(
+            horizon_days=horizon_days,
+            rolling_window=rolling_window,
+            points=points,
+            latest_rolling_decision_alpha=latest_rolling_decision_alpha,
+            latest_rolling_shortfall_gap=latest_rolling_shortfall_gap,
+            flag_negative_decision_alpha_streak=flag_negative_decision_alpha_streak,
+            flag_negative_rolling_decision_alpha=flag_negative_rolling_decision_alpha,
+            flag_rising_shortfall_gap=flag_rising_shortfall_gap,
+        )
+
+    if session is not None:
+        return _get(session)
+    with get_session() as session_obj:
+        return _get(session_obj)
+
+
 def save_executed_from_decisions(
     batch_id: int,
     session: Session | None = None,
@@ -983,4 +1149,6 @@ __all__ = [
     "log_decision",
     "save_executed_from_decisions",
     "get_weekly_outcome_report",
+    "upsert_weekly_outcome_metrics",
+    "get_weekly_outcome_trend",
 ]

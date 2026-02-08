@@ -84,6 +84,35 @@ class WeeklyOutcomeReport:
 
 
 @dataclass
+class WeeklyOutcomeMetricPoint:
+    batch_id: int
+    as_of_date: date
+    evaluation_date: date
+    horizon_days: int
+    item_count: int
+    decision_alpha: float
+    follow_hit_rate: float | None
+    shortfall_gap: float
+    decision_vs_benchmark: float | None
+    model_active_return: float
+    decision_active_return: float
+    model_implementation_shortfall: float
+    decision_implementation_shortfall: float
+
+
+@dataclass
+class WeeklyOutcomeTrendReport:
+    horizon_days: int
+    rolling_window: int
+    points: list[WeeklyOutcomeMetricPoint]
+    latest_rolling_decision_alpha: float | None
+    latest_rolling_shortfall_gap: float | None
+    flag_negative_decision_alpha_streak: bool
+    flag_negative_rolling_decision_alpha: bool
+    flag_rising_shortfall_gap: bool
+
+
+@dataclass
 class WorkflowDecisionInput:
     item_id: int
     decision: DecisionAction
@@ -106,6 +135,8 @@ __all__ = [
     "WeeklyAdvisorReport",
     "WeeklyOutcomeItem",
     "WeeklyOutcomeReport",
+    "WeeklyOutcomeMetricPoint",
+    "WeeklyOutcomeTrendReport",
     "WorkflowDecisionInput",
     "ExecutedPortfolioFromDecisions",
 ]

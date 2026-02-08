@@ -144,6 +144,8 @@ Phase 5 measures how the constructed portfolio performs versus the best-scoring 
 - Portfolio returns include configurable implementation costs based on turnover (`TRANSACTION_COST_BPS` + `SLIPPAGE_BPS`).
 - Alpha is defined as `portfolio_return(net) - benchmark_return` per month, with aggregates including CAGR, volatility, max drawdown, Sharpe, and cumulative alpha.
 - Summary diagnostics also include gross return, total cost drag, tracking error, information ratio, alpha hit rate, and average monthly turnover.
+- Weekly Advisor outcomes are now persisted in `weekly_outcome_metrics` (per batch + horizon) to support repeatable decision-quality monitoring.
+- Step 5 includes a rolling 12-batch trend view with degradation flags (4-batch negative decision-alpha streak, negative 4-batch average alpha, and rising shortfall gap).
 - CLI helper:
 
 ```bash
@@ -232,6 +234,8 @@ The Weekly Advisor now follows a 5-step process:
 3. Decide (`follow|ignore|partial`)
 4. Save Executed Portfolio
 5. Review Outcomes (including forward decision attribution vs model recommendation impacts)
+
+Step 5 now auto-persists outcome KPIs and renders a read-only trend scorecard for decision quality over time.
 
 ## Research & Governance (Phase 2)
 
