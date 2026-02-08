@@ -141,6 +141,22 @@ class Settings(BaseSettings):
         default_factory=lambda: ["QQQ", "SPY", "VMID", "GLD", "IAU", "BIL"],
         description="Default benchmark/asset tickers to fetch",
     )
+    discovery_exclude_benchmark_etfs: bool = Field(
+        True,
+        description="If true, discovery excludes benchmark ETFs from candidate outputs.",
+    )
+    discovery_min_history_days: int = Field(
+        252,
+        description="Minimum history length required for discovery candidate eligibility.",
+    )
+    discovery_min_adv_usd: float = Field(
+        5_000_000.0,
+        description="Minimum average daily dollar volume required for discovery candidates.",
+    )
+    discovery_watchlist_limit: int = Field(
+        5,
+        description="Default max watchlist candidates fed from discovery to weekly advisor.",
+    )
 
     class Config:
         env_file = ".env"

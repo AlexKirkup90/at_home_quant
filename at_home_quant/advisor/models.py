@@ -29,6 +29,9 @@ class AdvisorWatchItem:
     ticker: str
     composite_score: float
     reason: str
+    tier: str | None = None
+    source_universe: str | None = None
+    score_delta: float | None = None
 
 
 @dataclass

@@ -132,6 +132,39 @@ class WeeklyRecommendationItem(Base):
     rationale = Column(Text, nullable=False)
 
 
+class DiscoveryRun(Base):
+    __tablename__ = "discovery_runs"
+
+    id = Column(Integer, primary_key=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow, index=True)
+    as_of_date = Column(Date, nullable=False, index=True)
+    status = Column(String, nullable=False, default="running", index=True)  # running|succeeded|failed
+    best_universe = Column(String, nullable=True, index=True)
+    data_snapshot_hash = Column(String, nullable=True, index=True)
+    experiment_id = Column(Integer, ForeignKey("experiment_runs.id"), nullable=True, index=True)
+    candidate_count = Column(Integer, nullable=False, default=0)
+    summary_json = Column(Text, nullable=False, default="{}")
+    error_message = Column(Text, nullable=True)
+
+
+class DiscoveryCandidate(Base):
+    __tablename__ = "discovery_candidates"
+    __table_args__ = (UniqueConstraint("run_id", "ticker", name="uq_discovery_run_ticker"),)
+
+    id = Column(Integer, primary_key=True)
+    run_id = Column(Integer, ForeignKey("discovery_runs.id"), nullable=False, index=True)
+    as_of_date = Column(Date, nullable=False, index=True)
+    ticker = Column(String, nullable=False, index=True)
+    source_universe = Column(String, nullable=False, index=True)
+    composite_score = Column(Float, nullable=False)
+    discovery_score = Column(Float, nullable=False, index=True)
+    tier = Column(String, nullable=False, index=True)  # watch_closely|consider_buy|strong_buy
+    rationale = Column(Text, nullable=False)
+    risk_flags_json = Column(Text, nullable=False, default="[]")
+    score_delta = Column(Float, nullable=True)
+    is_current_holding = Column(Integer, nullable=False, default=0)  # 0|1 for SQLite portability
+
+
 class RecommendationDecision(Base):
     __tablename__ = "recommendation_decisions"
     __table_args__ = (UniqueConstraint("item_id", name="uq_recommendation_decision_item"),)
@@ -318,6 +351,8 @@ __all__ = [
     "AdvisorPortfolioSnapshot",
     "WeeklyRecommendationBatch",
     "WeeklyRecommendationItem",
+    "DiscoveryRun",
+    "DiscoveryCandidate",
     "RecommendationDecision",
     "WeeklyOutcomeMetric",
     "BackendRun",

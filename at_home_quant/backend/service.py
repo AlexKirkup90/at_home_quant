@@ -16,6 +16,7 @@ from at_home_quant.config.settings import get_settings
 from at_home_quant.data.fetcher import compute_returns
 from at_home_quant.data.health import get_data_health_report, get_portfolio_required_symbols
 from at_home_quant.data.quality import evaluate_price_quality
+from at_home_quant.discovery.service import run_discovery_scan
 from at_home_quant.db.models import BackendRun, DataLayerPrice, DatasetSnapshot, PriceDaily, Ticker
 from at_home_quant.db.session import get_session, init_db
 from at_home_quant.etl.daily_update import run_daily_update
@@ -141,6 +142,7 @@ def _persist_layer_snapshot(
 def run_backend_pipeline(
     as_of_date: datetime.date | None = None,
     include_weekly_recommendation: bool = True,
+    include_discovery: bool = True,
     retries: int = 2,
     top_n: int = 15,
     threshold: float = 0.005,
@@ -227,6 +229,7 @@ def run_backend_pipeline(
                 )
 
                 recommendation_batch_id = None
+                discovery_run_id = None
                 if include_weekly_recommendation:
                     experiment = register_experiment(
                         session=session,
@@ -238,6 +241,19 @@ def run_backend_pipeline(
                     )
                     experiment_id = experiment.id
                     attempt_experiment_id = experiment.id
+                    if include_discovery:
+                        discovery_report = run_discovery_scan(
+                            as_of_date=resolved_as_of,
+                            data_snapshot_hash=feature_snapshot.snapshot_hash,
+                            experiment_id=experiment.id,
+                            session=session,
+                        )
+                        if discovery_report.status != "succeeded":
+                            raise ValueError(
+                                "Discovery scan failed: "
+                                + (discovery_report.error_message or "unknown error")
+                            )
+                        discovery_run_id = discovery_report.run_id
                     report = generate_weekly_recommendation(
                         as_of_date=resolved_as_of,
                         top_n=top_n,
@@ -269,6 +285,18 @@ def run_backend_pipeline(
                             "max_adv_participation_seen": report.pretrade_summary.get("max_adv_participation_seen", 0.0),
                         },
                     )
+                elif include_discovery:
+                    discovery_report = run_discovery_scan(
+                        as_of_date=resolved_as_of,
+                        data_snapshot_hash=feature_snapshot.snapshot_hash,
+                        experiment_id=None,
+                        session=session,
+                    )
+                    if discovery_report.status != "succeeded":
+                        raise ValueError(
+                            "Discovery scan failed: " + (discovery_report.error_message or "unknown error")
+                        )
+                    discovery_run_id = discovery_report.run_id
 
                 run.status = "succeeded"
                 run.finished_at = datetime.datetime.utcnow()
@@ -277,6 +305,7 @@ def run_backend_pipeline(
                     quality.summary()
                     + " | required_symbols="
                     + ",".join(required_symbols)
+                    + f" | discovery_run_id={discovery_run_id}"
                 )
                 LOGGER.info(
                     "backend_run_succeeded run_id=%s as_of=%s snapshot=%s",
@@ -294,6 +323,7 @@ def run_backend_pipeline(
                         "data_snapshot_hash": feature_snapshot.snapshot_hash,
                         "recommendation_batch_id": recommendation_batch_id,
                         "experiment_id": experiment_id,
+                        "discovery_run_id": discovery_run_id,
                     },
                 )
 
@@ -309,6 +339,7 @@ def run_backend_pipeline(
                     ),
                     recommendation_batch_id=recommendation_batch_id,
                     experiment_id=experiment_id,
+                    discovery_run_id=discovery_run_id,
                 )
         except Exception as exc:  # noqa: BLE001
             last_error = exc

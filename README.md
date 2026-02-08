@@ -45,6 +45,10 @@ Data mode and health-gate controls:
 - `MIN_TRADE_DELTA_PCT=5.0` (minimum absolute trade size before emitting buy/sell recommendations).
 - `WEIGHT_ROUNDING_PCT=1.0` (round target weights to practical increments).
 - `ENABLE_TRADE_GATING=true` (cost-aware gate to suppress low-signal over-trading).
+- `DISCOVERY_EXCLUDE_BENCHMARK_ETFS=true` (drop benchmark ETFs such as `QQQ`, `SPY`, `VMID` from discovery candidates).
+- `DISCOVERY_MIN_HISTORY_DAYS=252` (minimum history required for discovery eligibility).
+- `DISCOVERY_MIN_ADV_USD=5000000` (minimum ADV required for discovery eligibility).
+- `DISCOVERY_WATCHLIST_LIMIT=5` (max discovery names fed into Weekly Advisor watchlist).
 - `SHOW_DEBUG_ADMIN=false` (keep Advanced tab read-only; set true to expose debug write controls).
 - `APP_ENV=dev|stage|prod` (environment context for release controls/audit logs).
 - `OPERATOR_ID=<name>` (actor identity recorded in immutable audit events).
@@ -181,15 +185,13 @@ pip install -r requirements.txt
 streamlit run at_home_quant/app.py
 ```
 
-The dashboard is organized into four sections:
+The dashboard is organized into three primary tabs:
 
-- **Portfolio Onboarding** – paste your current live holdings (ticker + weight) and save an anchor portfolio snapshot that future rebalance recommendations use as the baseline.
-- **Regime & Universe Overview** – select a date to view the best universe, composite scores, and suggested equity exposure band.
-- **Current Portfolio & Rebalance** – build the monthly target portfolio, see sleeve weights, and view buy/sell/hold instructions for the selected date.
-- **Stock Ranking (Equity Sleeve Detail)** – choose a universe, date, and Top-N cutoff to inspect factor scores for the leading stocks.
-- **Performance & Alpha** – tune benchmark timing and implementation cost assumptions, then review monthly net/gross returns, turnover/cost history, and summary diagnostics (including tracking error and information ratio).
+- **Weekly Advisor** – run backend sync, confirm holdings, log `follow|ignore|partial` decisions, save executed portfolios, and review outcomes.
+- **Discovery** – run broad cross-universe discovery scans that assign each candidate a tier (`Watch Closely`, `Consider Buy`, `Strong Buy`) with normalized scores, factor-driver rationale, and risk flags.
+- **Advanced** – read-only reporting (health, regime, portfolio/risk, ranking, performance, governance). Debug/write actions are hidden unless `SHOW_DEBUG_ADMIN=true`.
 
-Advanced tab defaults to read-only reporting (health, regime, portfolio/risk, ranking, performance, governance). Debug/write actions are hidden unless `SHOW_DEBUG_ADMIN=true`.
+Discovery outputs are persisted and used as the default source for the Weekly Advisor watchlist.
 
 ## Weekly Advisor Workflow (UI)
 
@@ -225,8 +227,9 @@ This pipeline performs:
 1. ETL sync with retry/failure state tracking (`backend_runs` table).
 2. Versioned dataset snapshots for `raw`, `clean`, and `feature` layers (`dataset_snapshots` + `data_layer_prices`).
 3. Data quality gating (missingness, staleness, return outliers, adjustment-ratio sanity).
-4. Weekly recommendation generation linked to immutable `data_snapshot_hash`.
-5. Best-effort fundamentals refresh into `fundamental_snapshots` for point-in-time factor joins.
+4. Discovery scan generation (`discovery_runs` + `discovery_candidates`) for tiered watchlist candidates.
+5. Weekly recommendation generation linked to immutable `data_snapshot_hash`.
+6. Best-effort fundamentals refresh into `fundamental_snapshots` for point-in-time factor joins.
 
 The Weekly Advisor now follows a 5-step process:
 

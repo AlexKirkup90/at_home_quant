@@ -7,7 +7,15 @@ from sqlalchemy.pool import StaticPool
 
 import at_home_quant.backend.service as backend_service_module
 from at_home_quant.data.tickers import BENCHMARKS, TickerInfo
-from at_home_quant.db.models import BackendRun, Base, DataLayerPrice, DatasetSnapshot, PriceDaily, Ticker
+from at_home_quant.db.models import (
+    BackendRun,
+    Base,
+    DataLayerPrice,
+    DatasetSnapshot,
+    DiscoveryRun,
+    PriceDaily,
+    Ticker,
+)
 
 
 def _add_ticker(session: Session, info: TickerInfo) -> int:
@@ -86,12 +94,15 @@ def test_run_backend_pipeline_creates_layer_snapshots(monkeypatch):
     )
     assert result.status == "succeeded"
     assert result.data_snapshot_hash
+    assert result.discovery_run_id is not None
 
     with Session(engine) as session:
         layers = session.query(DatasetSnapshot.layer).all()
         run = session.query(BackendRun).filter(BackendRun.id == result.run_id).one()
+        discovery = session.query(DiscoveryRun).filter(DiscoveryRun.id == result.discovery_run_id).one()
         assert sorted(layer for (layer,) in layers) == ["clean", "feature", "raw"]
         assert run.status == "succeeded"
+        assert discovery.status == "succeeded"
 
 
 def test_run_backend_pipeline_marks_failed_on_empty_data(monkeypatch):

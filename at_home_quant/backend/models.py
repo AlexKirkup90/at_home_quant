@@ -13,6 +13,7 @@ class BackendPipelineResult:
     quality_summary: str
     recommendation_batch_id: int | None = None
     experiment_id: int | None = None
+    discovery_run_id: int | None = None
 
 
 __all__ = ["BackendPipelineResult"]

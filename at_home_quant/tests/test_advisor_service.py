@@ -19,7 +19,8 @@ from at_home_quant.advisor.service import (
     save_executed_from_decisions,
     upsert_weekly_outcome_metrics,
 )
-from at_home_quant.data.tickers import BENCHMARKS, SAMPLE_NASDAQ100, TickerInfo, TickerType
+from at_home_quant.discovery.service import run_discovery_scan
+from at_home_quant.data.tickers import BENCHMARKS, SAMPLE_NASDAQ100, TickerInfo, TickerType, Universe
 from at_home_quant.db.models import (
     Base,
     DatasetSnapshot,
@@ -394,6 +395,62 @@ def test_weekly_outcome_metrics_upsert_is_idempotent():
             )
         ).scalars().all()
         assert len(rows) == 1
+
+
+def test_weekly_recommendation_uses_discovery_feed_for_watchlist():
+    engine = create_engine("sqlite:///:memory:")
+    as_of = datetime.date(2025, 2, 28)
+    with Session(engine) as session:
+        _seed_prices(session, as_of)
+        amzn_id = _add_ticker(
+            session,
+            TickerInfo(
+                symbol="AMZN",
+                name="Amazon.com Inc.",
+                asset_type=TickerType.EQUITY,
+                universe=Universe.SP500,
+                currency="USD",
+            ),
+        )
+        for idx, dt in enumerate(pd.bdate_range(end=as_of, periods=320)):
+            price = 90 + idx * 0.18
+            session.add(
+                PriceDaily(
+                    ticker_id=amzn_id,
+                    date=dt.date(),
+                    adj_close=price,
+                    volume=2_000_000,
+                )
+            )
+        session.commit()
+        snapshot_hash = "g" * 64
+        _seed_feature_snapshot(session, as_of, snapshot_hash)
+        experiment_id = _seed_experiment(session, as_of, snapshot_hash)
+        positions = [
+            TargetPosition("AAPL", 0.40, "equity"),
+            TargetPosition("MSFT", 0.35, "equity"),
+            TargetPosition("GLD", 0.10, "gold"),
+            TargetPosition("BIL", 0.15, "cash"),
+        ]
+        save_advisor_portfolio_snapshot(as_of_date=as_of, positions=positions, snapshot_type="baseline", session=session)
+        save_advisor_portfolio_snapshot(as_of_date=as_of, positions=positions, snapshot_type="executed", session=session)
+
+        discovery = run_discovery_scan(
+            as_of_date=as_of,
+            data_snapshot_hash=snapshot_hash,
+            experiment_id=experiment_id,
+            session=session,
+        )
+        assert discovery.status == "succeeded"
+        report = generate_weekly_recommendation(
+            as_of_date=as_of,
+            top_n=2,
+            data_snapshot_hash=snapshot_hash,
+            experiment_id=experiment_id,
+            session=session,
+        )
+        assert report.watchlist
+        assert any(item.tier in {"Watch Closely", "Consider Buy", "Strong Buy"} for item in report.watchlist)
 
 
 def test_weekly_outcome_trend_flags_negative_alpha_streak():

@@ -40,6 +40,7 @@ from at_home_quant.advisor.service import (
     save_executed_from_decisions,
     upsert_weekly_outcome_metrics,
 )
+from at_home_quant.discovery.service import get_latest_discovery_report, run_discovery_scan
 from at_home_quant.research.service import run_walk_forward_experiment
 from at_home_quant.data.tickers import Universe
 from at_home_quant.data.health import get_data_health_report
@@ -283,7 +284,7 @@ def show_weekly_advisor_section() -> None:
 
     st.subheader("Step 1 — Run Backend")
     st.caption(
-        "Runs ETL sync, quality gates, versioned data snapshots, experiment registration, and recommendation generation."
+        "Runs ETL sync, quality gates, versioned data snapshots, discovery scan, experiment registration, and recommendation generation."
     )
     force_rerun = st.checkbox(
         "Force rerun even if recommendation already exists for this date",
@@ -318,7 +319,7 @@ def show_weekly_advisor_section() -> None:
                 )
                 st.caption(
                     f"snapshot={result.data_snapshot_hash} | recommendation_batch={result.recommendation_batch_id} "
-                    f"| experiment={result.experiment_id}"
+                    f"| experiment={result.experiment_id} | discovery_run={result.discovery_run_id}"
                 )
             except Exception as exc:  # noqa: BLE001
                 st.error(f"Backend run failed: {exc}")
@@ -534,11 +535,17 @@ def show_weekly_advisor_section() -> None:
             review_df[column] = review_df[column].map(lambda value: f"{float(value) * 100:.2f}%")
         st.dataframe(review_df, width="stretch", hide_index=True)
 
-    st.markdown("**Watchlist (near-buys)**")
+    st.markdown("**Watchlist (discovery-fed)**")
     if not report.watchlist:
         st.caption("No watchlist candidates for this cycle.")
     else:
         watch_df = pd.DataFrame([asdict(item) for item in report.watchlist])
+        if "composite_score" in watch_df.columns:
+            watch_df["composite_score"] = watch_df["composite_score"].map(lambda value: f"{float(value):.1f}")
+        if "score_delta" in watch_df.columns:
+            watch_df["score_delta"] = watch_df["score_delta"].map(
+                lambda value: "" if pd.isna(value) else f"{float(value):+.1f}"
+            )
         st.dataframe(watch_df, width="stretch", hide_index=True)
 
     st.markdown("**Decision Outcome Attribution**")
@@ -678,6 +685,112 @@ def show_weekly_advisor_section() -> None:
             for column in ["model_impact", "decision_impact", "impact_gap", "forward_return"]:
                 missed_df[column] = missed_df[column].map(lambda value: f"{float(value) * 100:.2f}%")
             st.dataframe(missed_df, width="stretch", hide_index=True)
+
+
+def show_discovery_section() -> None:
+    require_streamlit()
+    st.header("Discovery")
+    st.caption(
+        "Cross-universe discovery for emerging stock/ETF ideas. "
+        "Outputs are tiered (Watch Closely / Consider Buy / Strong Buy) and feed Weekly Advisor watchlists."
+    )
+
+    latest_price_date = get_latest_price_date()
+    if latest_price_date is None:
+        st.warning("No price data found. Run Step 1 in Weekly Advisor first.")
+        return
+
+    as_of_date = st.date_input(
+        "Discovery as-of date",
+        value=latest_price_date,
+        max_value=latest_price_date,
+        key="discovery_as_of_date",
+    )
+    col1, col2 = st.columns(2)
+    max_per_universe = col1.slider("Candidates per universe", min_value=10, max_value=80, value=30, step=5)
+    max_candidates = col2.slider("Total candidates stored", min_value=20, max_value=150, value=60, step=5)
+
+    if st.button("Run Discovery Scan", key="run_discovery_scan"):
+        with st.spinner("Running discovery scan..."):
+            try:
+                report = run_discovery_scan(
+                    as_of_date=as_of_date,
+                    max_per_universe=max_per_universe,
+                    max_candidates=max_candidates,
+                )
+                if report.status == "succeeded":
+                    st.success(
+                        f"Discovery run {report.run_id} completed for {report.as_of_date.isoformat()} "
+                        f"with {report.candidate_count} candidates."
+                    )
+                else:
+                    st.error(f"Discovery run {report.run_id} failed: {report.error_message}")
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Discovery run failed: {exc}")
+
+    report = get_latest_discovery_report(as_of_date=as_of_date, limit=max_candidates)
+    if report is None:
+        st.info("No discovery runs found yet. Run Discovery Scan to generate candidates.")
+        return
+
+    dcol1, dcol2, dcol3, dcol4 = st.columns(4)
+    dcol1.metric("Run ID", str(report.run_id))
+    dcol2.metric("Status", report.status.upper())
+    dcol3.metric("As-of", report.as_of_date.isoformat())
+    dcol4.metric("Candidates", str(report.candidate_count))
+    st.caption(
+        f"Best universe: {report.best_universe or 'N/A'} | "
+        f"snapshot={report.data_snapshot_hash or 'N/A'} | experiment={report.experiment_id or 'N/A'}"
+    )
+    tier_counts = report.summary.get("tier_counts", {}) if isinstance(report.summary, dict) else {}
+    if tier_counts:
+        tier_line = " | ".join(f"{tier}: {count}" for tier, count in sorted(tier_counts.items()))
+        st.caption("Tier mix: " + tier_line)
+    if report.status != "succeeded":
+        st.warning(report.error_message or "Latest discovery run is not successful.")
+        return
+
+    if not report.candidates:
+        st.caption("No discovery candidates were produced for this run.")
+        return
+
+    selected_tiers = st.multiselect(
+        "Filter by tier",
+        options=["Strong Buy", "Consider Buy", "Watch Closely"],
+        default=["Strong Buy", "Consider Buy", "Watch Closely"],
+        key="discovery_tier_filter",
+    )
+    hide_current_holdings = st.checkbox("Hide current holdings", value=True, key="discovery_hide_holdings")
+    rows = []
+    for item in report.candidates:
+        if selected_tiers and item.tier not in selected_tiers:
+            continue
+        if hide_current_holdings and item.is_current_holding:
+            continue
+        rows.append(
+            {
+                "ticker": item.ticker,
+                "tier": item.tier,
+                "discovery_score": item.discovery_score,
+                "score_delta": item.score_delta,
+                "source_universe": item.source_universe,
+                "composite_score": item.composite_score,
+                "risk_flags": ", ".join(item.risk_flags) if item.risk_flags else "",
+                "rationale": item.rationale,
+                "is_current_holding": item.is_current_holding,
+            }
+        )
+    if not rows:
+        st.caption("No candidates match the current filter.")
+        return
+
+    discovery_df = pd.DataFrame(rows)
+    discovery_df["discovery_score"] = discovery_df["discovery_score"].map(lambda value: f"{float(value):.1f}")
+    discovery_df["composite_score"] = discovery_df["composite_score"].map(lambda value: f"{float(value):.3f}")
+    discovery_df["score_delta"] = discovery_df["score_delta"].map(
+        lambda value: "" if pd.isna(value) else f"{float(value):+.1f}"
+    )
+    st.dataframe(discovery_df, width="stretch", hide_index=True)
 
 
 def show_onboarding_section() -> None:
@@ -1186,10 +1299,13 @@ def main() -> None:
             unsafe_allow_html=True,
         )
 
-    weekly_tab, advanced_tab = st.tabs(["Weekly Advisor", "Advanced"])
+    weekly_tab, discovery_tab, advanced_tab = st.tabs(["Weekly Advisor", "Discovery", "Advanced"])
 
     with weekly_tab:
         show_weekly_advisor_section()
+
+    with discovery_tab:
+        show_discovery_section()
 
     with advanced_tab:
         latest_price_date = get_latest_price_date()

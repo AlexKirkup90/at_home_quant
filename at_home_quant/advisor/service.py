@@ -31,6 +31,7 @@ from at_home_quant.data.tickers import (
     canonical_symbol,
     equivalent_symbols,
 )
+from at_home_quant.discovery.service import get_discovery_watchlist
 from at_home_quant.db import crud
 from at_home_quant.db.models import (
     AdvisorPortfolioSnapshot,
@@ -352,6 +353,30 @@ def _build_watchlist(
     session: Session,
 ) -> list[AdvisorWatchItem]:
     target_equities = {p.ticker for p in target_portfolio.positions if p.asset_type == "equity"}
+    discovery_watchlist = get_discovery_watchlist(
+        as_of_date=as_of_date,
+        limit=5,
+        exclude_symbols=target_equities,
+        session=session,
+    )
+    if discovery_watchlist:
+        items: list[AdvisorWatchItem] = []
+        for candidate in discovery_watchlist:
+            reason = f"{candidate.tier}: {candidate.rationale}"
+            if candidate.score_delta is not None:
+                reason += f" (score change {candidate.score_delta:+.1f})"
+            items.append(
+                AdvisorWatchItem(
+                    ticker=candidate.ticker,
+                    composite_score=candidate.discovery_score,
+                    reason=reason,
+                    tier=candidate.tier,
+                    source_universe=candidate.source_universe,
+                    score_delta=candidate.score_delta,
+                )
+            )
+        return items
+
     ranked = rank_universe(best_universe, as_of_date, top_n=top_n + 8, session=session)
     watchlist: list[AdvisorWatchItem] = []
     for item in ranked:
