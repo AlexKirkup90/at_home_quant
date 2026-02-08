@@ -32,6 +32,7 @@ from at_home_quant.backend.service import run_backend_pipeline
 from at_home_quant.advisor.models import WorkflowDecisionInput
 from at_home_quant.advisor.service import (
     get_latest_advisor_portfolio,
+    get_weekly_decision_scorecard,
     get_weekly_outcome_trend,
     get_latest_weekly_report,
     log_decision,
@@ -636,6 +637,47 @@ def show_weekly_advisor_section() -> None:
             st.warning("Degradation flag: the 4-batch average decision alpha is below zero.")
         if trend_report.flag_rising_shortfall_gap:
             st.warning("Degradation flag: implementation shortfall gap is rising across the latest 4-batch window.")
+
+    decision_scorecard = get_weekly_decision_scorecard(
+        batch_id=report.batch_id,
+        horizon_days=outcome_horizon_days,
+        lookback=12,
+        rolling_window=4,
+        top_n=5,
+    )
+    if decision_scorecard is not None:
+        st.markdown("**Decision Diagnostics (Phase 5B)**")
+        dcol1, dcol2, dcol3 = st.columns(3)
+        dcol1.metric("Rolling Decision Alpha (4)", _format_pct(decision_scorecard.rolling_decision_alpha))
+        dcol2.metric("Rolling Shortfall Gap (4)", _format_pct(decision_scorecard.rolling_shortfall_gap))
+        dcol3.metric("Rolling Follow Hit Rate (4)", _format_pct(decision_scorecard.rolling_follow_hit_rate))
+
+        if decision_scorecard.bucket_summaries:
+            bucket_df = pd.DataFrame([asdict(item) for item in decision_scorecard.bucket_summaries])
+            for column in ["total_model_impact", "total_decision_impact", "total_impact_gap", "avg_impact_gap"]:
+                bucket_df[column] = bucket_df[column].map(lambda value: f"{float(value) * 100:.2f}%")
+            st.dataframe(bucket_df, width="stretch", hide_index=True)
+
+        if decision_scorecard.top_value_added:
+            st.caption("Top value-added decisions")
+            top_add_df = pd.DataFrame([asdict(item) for item in decision_scorecard.top_value_added])
+            for column in ["model_impact", "decision_impact", "impact_gap", "forward_return"]:
+                top_add_df[column] = top_add_df[column].map(lambda value: f"{float(value) * 100:.2f}%")
+            st.dataframe(top_add_df, width="stretch", hide_index=True)
+
+        if decision_scorecard.top_detractors:
+            st.caption("Top detracting decisions")
+            detractor_df = pd.DataFrame([asdict(item) for item in decision_scorecard.top_detractors])
+            for column in ["model_impact", "decision_impact", "impact_gap", "forward_return"]:
+                detractor_df[column] = detractor_df[column].map(lambda value: f"{float(value) * 100:.2f}%")
+            st.dataframe(detractor_df, width="stretch", hide_index=True)
+
+        if decision_scorecard.missed_opportunities:
+            st.caption("Largest missed opportunities (ignored/partial where model impact was better)")
+            missed_df = pd.DataFrame([asdict(item) for item in decision_scorecard.missed_opportunities])
+            for column in ["model_impact", "decision_impact", "impact_gap", "forward_return"]:
+                missed_df[column] = missed_df[column].map(lambda value: f"{float(value) * 100:.2f}%")
+            st.dataframe(missed_df, width="stretch", hide_index=True)
 
 
 def show_onboarding_section() -> None:

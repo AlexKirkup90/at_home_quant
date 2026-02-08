@@ -5,9 +5,11 @@ import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
-from at_home_quant.advisor.models import WorkflowDecisionInput
+from at_home_quant.advisor.models import WeeklyOutcomeItem, WeeklyOutcomeReport, WorkflowDecisionInput
 from at_home_quant.advisor.service import (
+    _build_decision_scorecard,
     generate_weekly_recommendation,
+    get_weekly_decision_scorecard,
     get_latest_advisor_portfolio,
     get_weekly_outcome_trend,
     get_weekly_outcome_report,
@@ -441,3 +443,113 @@ def test_weekly_outcome_trend_flags_negative_alpha_streak():
         assert trend.flag_negative_decision_alpha_streak
         assert trend.flag_negative_rolling_decision_alpha
         assert trend.flag_rising_shortfall_gap
+
+
+def test_weekly_decision_scorecard_summarizes_batch():
+    engine = create_engine("sqlite:///:memory:")
+    as_of = datetime.date(2025, 2, 20)
+    future_end = datetime.date(2025, 2, 28)
+    with Session(engine) as session:
+        _seed_prices(session, future_end)
+        snapshot_hash = "f" * 64
+        _seed_feature_snapshot(session, as_of, snapshot_hash)
+        experiment_id = _seed_experiment(session, as_of, snapshot_hash)
+        positions = [
+            TargetPosition("AAPL", 0.40, "equity"),
+            TargetPosition("MSFT", 0.35, "equity"),
+            TargetPosition("GLD", 0.10, "gold"),
+            TargetPosition("BIL", 0.15, "cash"),
+        ]
+        save_advisor_portfolio_snapshot(as_of_date=as_of, positions=positions, snapshot_type="baseline", session=session)
+        save_advisor_portfolio_snapshot(as_of_date=as_of, positions=positions, snapshot_type="executed", session=session)
+        report = generate_weekly_recommendation(
+            as_of_date=as_of,
+            top_n=2,
+            data_snapshot_hash=snapshot_hash,
+            experiment_id=experiment_id,
+            session=session,
+        )
+        decisions = ["follow", "ignore", "partial"]
+        for idx, item in enumerate(report.recommendations):
+            decision = decisions[idx % len(decisions)]
+            log_decision(
+                WorkflowDecisionInput(
+                    item_id=item.id,
+                    decision=decision,
+                    executed_weight=(item.current_weight + item.target_weight) / 2.0 if decision == "partial" else None,
+                ),
+                session=session,
+            )
+
+        scorecard = get_weekly_decision_scorecard(
+            batch_id=report.batch_id,
+            horizon_days=7,
+            lookback=12,
+            rolling_window=4,
+            session=session,
+        )
+        assert scorecard is not None
+        assert scorecard.bucket_summaries
+        assert sum(item.item_count for item in scorecard.bucket_summaries) > 0
+
+
+def test_build_decision_scorecard_identifies_missed_opportunities():
+    report = WeeklyOutcomeReport(
+        batch_id=1,
+        as_of_date=datetime.date(2025, 1, 31),
+        evaluation_date=datetime.date(2025, 2, 7),
+        horizon_days=7,
+        items=[
+            WeeklyOutcomeItem(
+                ticker="AAA",
+                recommendation="buy",
+                decision="ignore",
+                current_weight=0.10,
+                target_weight=0.20,
+                effective_weight=0.10,
+                forward_return=0.08,
+                model_impact=0.008,
+                decision_impact=0.0,
+                impact_gap=-0.008,
+            ),
+            WeeklyOutcomeItem(
+                ticker="BBB",
+                recommendation="sell",
+                decision="follow",
+                current_weight=0.20,
+                target_weight=0.10,
+                effective_weight=0.10,
+                forward_return=-0.05,
+                model_impact=0.005,
+                decision_impact=0.005,
+                impact_gap=0.0,
+            ),
+            WeeklyOutcomeItem(
+                ticker="CCC",
+                recommendation="buy",
+                decision="partial",
+                current_weight=0.05,
+                target_weight=0.15,
+                effective_weight=0.10,
+                forward_return=0.04,
+                model_impact=0.004,
+                decision_impact=0.002,
+                impact_gap=-0.002,
+            ),
+        ],
+        model_active_return=0.017,
+        decision_active_return=0.007,
+        decision_alpha=-0.01,
+        follow_hit_rate=1.0,
+        ignored_positive_count=1,
+    )
+    scorecard = _build_decision_scorecard(
+        report,
+        rolling_decision_alpha=-0.01,
+        rolling_shortfall_gap=0.002,
+        rolling_follow_hit_rate=0.5,
+        top_n=3,
+    )
+    assert scorecard.missed_opportunities
+    assert scorecard.missed_opportunities[0].ticker == "AAA"
+    assert any(item.decision == "ignore" for item in scorecard.bucket_summaries)

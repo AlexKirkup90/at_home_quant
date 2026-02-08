@@ -13,6 +13,9 @@ from at_home_quant.advisor.models import (
     AdvisorWatchItem,
     ExecutedPortfolioFromDecisions,
     WeeklyAdvisorReport,
+    WeeklyDecisionBucketSummary,
+    WeeklyDecisionDiagnosticItem,
+    WeeklyDecisionScorecard,
     WeeklyOutcomeMetricPoint,
     WeeklyOutcomeItem,
     WeeklyOutcomeReport,
@@ -1060,6 +1063,138 @@ def get_weekly_outcome_trend(
         return _get(session_obj)
 
 
+def _build_decision_scorecard(
+    outcome_report: WeeklyOutcomeReport,
+    *,
+    rolling_decision_alpha: float | None,
+    rolling_shortfall_gap: float | None,
+    rolling_follow_hit_rate: float | None,
+    top_n: int = 5,
+) -> WeeklyDecisionScorecard:
+    buckets: dict[str, dict[str, float]] = {}
+    diagnostic_items: list[WeeklyDecisionDiagnosticItem] = []
+    for item in outcome_report.items:
+        decision = (item.decision or "ignore").lower()
+        bucket = buckets.setdefault(
+            decision,
+            {
+                "item_count": 0.0,
+                "total_model_impact": 0.0,
+                "total_decision_impact": 0.0,
+                "total_impact_gap": 0.0,
+            },
+        )
+        bucket["item_count"] += 1.0
+        bucket["total_model_impact"] += item.model_impact
+        bucket["total_decision_impact"] += item.decision_impact
+        bucket["total_impact_gap"] += item.impact_gap
+        diagnostic_items.append(
+            WeeklyDecisionDiagnosticItem(
+                ticker=item.ticker,
+                decision=decision,
+                recommendation=item.recommendation,
+                model_impact=item.model_impact,
+                decision_impact=item.decision_impact,
+                impact_gap=item.impact_gap,
+                forward_return=item.forward_return,
+            )
+        )
+
+    ordered_decisions = ["follow", "partial", "ignore"]
+    bucket_summaries: list[WeeklyDecisionBucketSummary] = []
+    for decision in ordered_decisions + sorted(d for d in buckets.keys() if d not in ordered_decisions):
+        if decision not in buckets:
+            continue
+        bucket = buckets[decision]
+        item_count = int(bucket["item_count"])
+        total_impact_gap = float(bucket["total_impact_gap"])
+        bucket_summaries.append(
+            WeeklyDecisionBucketSummary(
+                decision=decision,
+                item_count=item_count,
+                total_model_impact=float(bucket["total_model_impact"]),
+                total_decision_impact=float(bucket["total_decision_impact"]),
+                total_impact_gap=total_impact_gap,
+                avg_impact_gap=(0.0 if item_count == 0 else total_impact_gap / item_count),
+            )
+        )
+
+    top_value_added = sorted(
+        [item for item in diagnostic_items if item.impact_gap > 0],
+        key=lambda row: row.impact_gap,
+        reverse=True,
+    )[:top_n]
+    top_detractors = sorted(
+        [item for item in diagnostic_items if item.impact_gap < 0],
+        key=lambda row: row.impact_gap,
+    )[:top_n]
+    missed_opportunities = sorted(
+        [
+            item
+            for item in diagnostic_items
+            if item.decision in {"ignore", "partial"} and item.model_impact > item.decision_impact
+        ],
+        key=lambda row: (row.model_impact - row.decision_impact),
+        reverse=True,
+    )[:top_n]
+
+    return WeeklyDecisionScorecard(
+        batch_id=outcome_report.batch_id,
+        as_of_date=outcome_report.as_of_date,
+        evaluation_date=outcome_report.evaluation_date,
+        horizon_days=outcome_report.horizon_days,
+        bucket_summaries=bucket_summaries,
+        top_value_added=top_value_added,
+        top_detractors=top_detractors,
+        missed_opportunities=missed_opportunities,
+        rolling_decision_alpha=rolling_decision_alpha,
+        rolling_shortfall_gap=rolling_shortfall_gap,
+        rolling_follow_hit_rate=rolling_follow_hit_rate,
+    )
+
+
+def get_weekly_decision_scorecard(
+    batch_id: int,
+    horizon_days: int = 7,
+    lookback: int = 12,
+    rolling_window: int = 4,
+    top_n: int = 5,
+    session: Session | None = None,
+) -> WeeklyDecisionScorecard | None:
+    def _get(session_obj: Session) -> WeeklyDecisionScorecard | None:
+        Base.metadata.create_all(bind=session_obj.bind)
+        outcome_report = upsert_weekly_outcome_metrics(
+            batch_id=batch_id,
+            horizon_days=horizon_days,
+            session=session_obj,
+        )
+        if outcome_report is None:
+            return None
+        trend = get_weekly_outcome_trend(
+            horizon_days=horizon_days,
+            lookback=lookback,
+            rolling_window=rolling_window,
+            session=session_obj,
+        )
+        rolling_follow_hit_rate = None
+        tail_points = trend.points[-rolling_window:]
+        hit_rates = [point.follow_hit_rate for point in tail_points if point.follow_hit_rate is not None]
+        if hit_rates:
+            rolling_follow_hit_rate = sum(hit_rates) / len(hit_rates)
+        return _build_decision_scorecard(
+            outcome_report,
+            rolling_decision_alpha=trend.latest_rolling_decision_alpha,
+            rolling_shortfall_gap=trend.latest_rolling_shortfall_gap,
+            rolling_follow_hit_rate=rolling_follow_hit_rate,
+            top_n=top_n,
+        )
+
+    if session is not None:
+        return _get(session)
+    with get_session() as session_obj:
+        return _get(session_obj)
+
+
 def save_executed_from_decisions(
     batch_id: int,
     session: Session | None = None,
@@ -1151,4 +1286,5 @@ __all__ = [
     "get_weekly_outcome_report",
     "upsert_weekly_outcome_metrics",
     "get_weekly_outcome_trend",
+    "get_weekly_decision_scorecard",
 ]

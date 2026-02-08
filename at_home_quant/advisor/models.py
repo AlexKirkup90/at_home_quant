@@ -113,6 +113,42 @@ class WeeklyOutcomeTrendReport:
 
 
 @dataclass
+class WeeklyDecisionBucketSummary:
+    decision: str
+    item_count: int
+    total_model_impact: float
+    total_decision_impact: float
+    total_impact_gap: float
+    avg_impact_gap: float
+
+
+@dataclass
+class WeeklyDecisionDiagnosticItem:
+    ticker: str
+    decision: str
+    recommendation: RecommendationAction
+    model_impact: float
+    decision_impact: float
+    impact_gap: float
+    forward_return: float
+
+
+@dataclass
+class WeeklyDecisionScorecard:
+    batch_id: int
+    as_of_date: date
+    evaluation_date: date
+    horizon_days: int
+    bucket_summaries: list[WeeklyDecisionBucketSummary]
+    top_value_added: list[WeeklyDecisionDiagnosticItem]
+    top_detractors: list[WeeklyDecisionDiagnosticItem]
+    missed_opportunities: list[WeeklyDecisionDiagnosticItem]
+    rolling_decision_alpha: float | None = None
+    rolling_shortfall_gap: float | None = None
+    rolling_follow_hit_rate: float | None = None
+
+
+@dataclass
 class WorkflowDecisionInput:
     item_id: int
     decision: DecisionAction
@@ -137,6 +173,9 @@ __all__ = [
     "WeeklyOutcomeReport",
     "WeeklyOutcomeMetricPoint",
     "WeeklyOutcomeTrendReport",
+    "WeeklyDecisionBucketSummary",
+    "WeeklyDecisionDiagnosticItem",
+    "WeeklyDecisionScorecard",
     "WorkflowDecisionInput",
     "ExecutedPortfolioFromDecisions",
 ]

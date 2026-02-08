@@ -146,6 +146,7 @@ Phase 5 measures how the constructed portfolio performs versus the best-scoring 
 - Summary diagnostics also include gross return, total cost drag, tracking error, information ratio, alpha hit rate, and average monthly turnover.
 - Weekly Advisor outcomes are now persisted in `weekly_outcome_metrics` (per batch + horizon) to support repeatable decision-quality monitoring.
 - Step 5 includes a rolling 12-batch trend view with degradation flags (4-batch negative decision-alpha streak, negative 4-batch average alpha, and rising shortfall gap).
+- Step 5 also includes a decision diagnostics scorecard (follow/partial/ignore attribution buckets, top value-added decisions, top detractors, and largest missed opportunities).
 - CLI helper:
 
 ```bash
